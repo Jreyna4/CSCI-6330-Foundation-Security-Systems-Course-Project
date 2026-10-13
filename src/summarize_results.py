@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 import pandas as pd
 
 from common import load_config, repo_path
@@ -57,7 +58,7 @@ def summary_table(runs):
 
 
 def plot_convergence(runs, path):
-    fig, ax = plt.subplots(figsize=(7, 4), facecolor=SURFACE)
+    fig, ax = plt.subplots(figsize=(8, 4), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     for exp, seeds in runs.items():
         if "round" not in seeds[0]["history"][0]:
@@ -71,13 +72,14 @@ def plot_convergence(runs, path):
 
     ax.set_xlabel("Round", color=TEXT)
     ax.set_ylabel("Validation macro F1", color=TEXT)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.tick_params(colors=MUTED)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(GRID)
-    ax.legend(frameon=False, labelcolor=TEXT)
+    ax.legend(frameon=False, labelcolor=TEXT, loc="center left", bbox_to_anchor=(1.0, 0.5))
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     print(f"Saved {path}")

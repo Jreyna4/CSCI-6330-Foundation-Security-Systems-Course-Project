@@ -18,8 +18,8 @@ def load_split(cfg, name):
     feature_cols = [
         c for c in df.columns if c not in NON_FEATURE_COLS | {cfg["data"]["label_col"]}
     ]
-    X = df[feature_cols].to_numpy(dtype=np.float32)
-    y = df["y"].to_numpy(dtype=np.int64)
+    X = df[feature_cols].to_numpy(dtype=np.float32, copy=True)
+    y = df["y"].to_numpy(dtype=np.int64, copy=True)
     return X, y, feature_cols
 
 
