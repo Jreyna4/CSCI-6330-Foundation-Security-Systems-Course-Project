@@ -1,0 +1,6 @@
+# Condition 2a: clean FedAvg on the IID control split.
+experiment: fedavg_iid
+partition:
+  method: iid
+federated:
+  aggregation: fedavg

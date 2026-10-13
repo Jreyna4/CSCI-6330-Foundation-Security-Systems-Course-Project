@@ -1,0 +1,6 @@
+# Condition 2b: clean FedAvg on the non-IID (k-means) split.
+experiment: fedavg_noniid
+partition:
+  method: kmeans
+federated:
+  aggregation: fedavg
