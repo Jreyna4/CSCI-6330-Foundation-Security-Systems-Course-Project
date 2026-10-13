@@ -1,0 +1,8 @@
+# Condition 4b: trimmed mean on the non-IID split with one label-flipping client.
+experiment: trimmed_noniid_poisoned
+partition:
+  method: kmeans
+federated:
+  aggregation: trimmed_mean
+attack:
+  enabled: true

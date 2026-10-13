@@ -1,0 +1,51 @@
+# Shared defaults. Every experiment file in configs/ overrides only the keys it
+# changes; src/common.py merges it on top of this file.
+
+experiment: default
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  results_dir: results
+
+data:
+  seed: 42                 # fixes the subset, the splits and the partitions
+  label_col: label         # column name in the CICIoT2023 CSV files
+  max_per_class: 45000     # keep all rows of rare families, cap common ones (~300k total)
+  max_files: null          # read only the first N raw CSVs (for quick tests); null = all
+  test_frac: 0.20
+  val_frac: 0.10
+  # Identifier / shortcut columns to drop before training. CICIoT2023's CSVs
+  # have no IPs, ports or timestamps, but check timing-like features (e.g. IAT)
+  # for shortcut behavior and list anything you drop here and in the report.
+  drop_cols: []
+  log_transform: true      # sign(x) * log1p(|x|) before standardizing (features are heavy-tailed)
+
+partition:
+  method: kmeans           # kmeans (non-IID, label-free) | iid (control)
+  num_clients: 4           # was 6 in the proposal; instructor asked for fewer
+
+model:
+  hidden_sizes: [128, 64]
+  dropout: 0.1
+
+train:
+  batch_size: 256
+  lr: 0.001
+  epochs: 30               # centralized only
+  local_epochs: 1          # federated: epochs per client per round
+
+federated:
+  rounds: 30
+  aggregation: fedavg      # fedavg | trimmed_mean | median
+  # Fraction trimmed from EACH end per coordinate. With 4 clients, 0.25 trims
+  # 1 high + 1 low value. Anything below 0.25 trims nothing at 4 clients.
+  trim_beta: 0.25
+
+attack:
+  enabled: false
+  attacker_clients: [0]    # TODO: pick and justify which client is malicious
+  flip_fraction: 0.5       # share of the attacker's attack rows relabeled
+  target_label: Benign
+
+seeds: [42, 43, 44]        # one run per seed; report mean and std

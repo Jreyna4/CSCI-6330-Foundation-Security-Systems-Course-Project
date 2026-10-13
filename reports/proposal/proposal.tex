@@ -1,0 +1,99 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\def\UrlFont{\footnotesize\ttfamily}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Federated Intrusion Detection Under Label-Flipping Poisoning:\\
+A Simulated Multi-Site Study on CICIoT2023}
+
+\author{
+\IEEEauthorblockN{Salvador Leon Lopez, Elena Victoria Sanchez, Joe Reyna, April Flores}
+\IEEEauthorblockA{Department of Computer Science\\
+The University of Texas Rio Grande Valley\\
+CSCI 6330: Foundations of Intelligent Security Systems, Fall 2026}
+}
+
+\maketitle
+
+\section{Problem and Motivation}
+Retail headquarters, hospitals and bank branches each see attack traffic the
+others never do, yet privacy policy bars pooling raw captures.
+Federated learning (FL) lets each site train locally and share only model
+updates \cite{mcmahan2017}. Since the server never inspects the underlying
+records, one compromised participant can corrupt the shared model
+\cite{tolpegin2020}. We quantify that exposure for intrusion detection.
+
+\section{Research Question and Expectation}
+\textbf{RQ:} In a six-client federated IDS trained on non-IID partitions of
+CICIoT2023, how much global detection performance is lost when one client
+performs a label-flipping attack, and does robust aggregation recover it?
+
+\textbf{Threat model and expectation:} One client relabels 50\% of its attack
+samples as benign each round; all other parties are honest. Under FedAvg we expect
+global macro F1 to fall by more than 3 points versus the clean run, and
+trimmed-mean aggregation \cite{yin2018} to recover at least half of that loss;
+smaller effects would falsify this.
+
+\section{Dataset and Client Partition}
+We use CICIoT2023 \cite{neto2023}, labeled IoT flows from the Canadian Institute
+for Cybersecurity. Its official page states no license and asks for citation, so
+we use it for coursework research only (accessed Sep.~20, 2026). It is
+lab-generated single-testbed data with heavy class imbalance, so the six branch
+offices are \textbf{simulated clients} produced by partitioning, and we make no
+real-world claims. We build a documented stratified subset of about 300{,}000
+flows, collapsing the 33 attack types into the seven published families plus
+benign. A stratified 20\% test set and 10\% validation set are held out first (seed 42); the
+test set is for final reporting only, and all settings are chosen on validation.
+The other 70\% is grouped into six clients by k-means ($k=6$, seed 42) on
+standardized flow features, fit on this pool only, so no labels build the
+partition; an IID split is the control. Clients are never defined by labels, IPs,
+ports, timestamps or row indices, and identifier fields (if present) are dropped
+to prevent shortcut learning. We quantify leakage risk with per-client label
+distributions and client--label mutual information.
+
+\section{Method and Experimental Conditions}
+Python, PyTorch and Flower \cite{beutel2020} run in single-machine simulation. One
+small MLP over numeric flow features is held constant; training runs 30 rounds
+of one local epoch, all six clients participating. Core configurations: (1) a
+\textbf{centralized reference} on pooled data; (2) a \textbf{clean federated
+baseline}, FedAvg on non-IID and IID splits; (3) a \textbf{poisoned condition} with
+one label-flipping client; and (4) \textbf{robust aggregation}, trimmed mean, on the
+poisoned and clean non-IID setups, since honest but heterogeneous clients can look
+like outliers. Local-only models and median aggregation are extensions.
+
+\section{Evaluation Plan}
+The primary metric is macro F1 on the global test set, since accuracy alone is
+insufficient on imbalanced data, with per-class precision, recall and FNR, FPR,
+PR-AUC and confusion matrices. Runs use 3 seeds (mean and standard deviation). Federated runs add per-round performance, client-level dispersion, a
+communication proxy (bytes per round) and runtime.
+
+\section{Safety, Reproducibility and Timeline}
+All experiments are simulated on the project's own static data and code; no real
+service, traffic generation, university or third-party system, or personal data is
+involved, and poisoning is a controlled label change compared against a clean
+baseline. The repository will include pinned dependencies, fixed seeds, subset and
+partition scripts, and a README reproducing every reported number. Milestone~1
+(Oct.~25): subset, partitions, centralized model; Milestone~2 (Nov.~15): clean vs.\
+poisoned runs; final (Nov.~30, Dec.~7): limitations, demo, defenses. Members own
+data preparation, the centralized model, the federated baseline, and attack and
+defense.
+
+\footnotesize
+\begin{thebibliography}{00}
+\itemsep 0pt
+\bibitem{mcmahan2017} B. McMahan \emph{et al.}, ``Communication-efficient learning of deep networks from decentralized data,'' \emph{Proc. AISTATS}, 2017.
+\bibitem{tolpegin2020} V. Tolpegin, S. Truex, M. E. Gursoy, and L. Liu, ``Data poisoning attacks against federated learning systems,'' \emph{Proc. ESORICS}, 2020.
+\bibitem{yin2018} D. Yin, Y. Chen, K. Ramchandran, and P. Bartlett, ``Byzantine-robust distributed learning,'' \emph{Proc. ICML}, 2018.
+\bibitem{neto2023} E. C. P. Neto \emph{et al.}, ``CICIoT2023: A real-time dataset and benchmark for large-scale attacks in IoT environment,'' \emph{Sensors}, vol.~23, no.~13, 2023. \url{https://www.unb.ca/cic/datasets/iotdataset-2023.html}
+\bibitem{beutel2020} D. J. Beutel \emph{et al.}, ``Flower: A friendly federated learning framework,'' \emph{arXiv:2007.14390}, 2020.
+\end{thebibliography}
+
+\end{document}

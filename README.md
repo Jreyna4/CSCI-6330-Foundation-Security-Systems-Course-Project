@@ -3,7 +3,7 @@
 A simulated multi-site study on CICIoT2023.
 Course project for **CSCI 6330: Foundations of Intelligent Security Systems** (Fall 2026), The University of Texas Rio Grande Valley.
 
-> **Status:** Proposal approved stage. Setting up the repository. No results yet.
+> **Status:** Repository scaffold is in place (data prep, partitioning, centralized model, federated loop, attack, defenses, metrics). No results yet.
 
 ## Team
 
@@ -12,99 +12,136 @@ Course project for **CSCI 6330: Foundations of Intelligent Security Systems** (F
 - Joe Reyna
 - April Flores
 
-| Area | Owner |
-|---|---|
-| Data preparation (subset, splits, client partitions) | TBD |
-| Centralized reference model | TBD |
-| Federated baseline (FedAvg, IID and non-IID) | TBD |
-| Attack (label flipping) and defense (trimmed mean) | TBD |
+| Area | Owner | Main file |
+|---|---|---|
+| Data preparation (subset, splits, client partitions) | TBD | `src/prepare_data.py` |
+| Centralized reference model | TBD | `src/train_centralized.py` |
+| Federated baseline (FedAvg, IID and non-IID) | TBD | `src/run_federated.py` (simulation loop, `fedavg`) |
+| Attack (label flipping) and defense (trimmed mean) | TBD | `src/run_federated.py` (`flip_labels`, `trimmed_mean`) |
+
+## Changes since the proposal
+
+- **Four clients instead of six.** The instructor said k = 6 was too many, so the k-means partition now uses k = 4 (`partition.num_clients` in `configs/default.yaml`). With one attacker, that is 1 of 4 clients (25%) instead of 1 of 6.
+- **Trimmed mean setting.** With 4 clients, `trim_beta = 0.25` trims the single highest and lowest value per coordinate. A smaller beta (for example 0.2) trims nothing at 4 clients and is just a plain mean.
+- **Federated framework.** The FL loop is a small single-process simulation in `src/run_federated.py` instead of Flower. The project spec allows "a clearly documented minimal simulation written by the team", and Flower 1.39 has deprecated its `run_simulation()` API in favor of a SuperLink-based setup. FedAvg, trimmed mean and median are implemented in `src/run_federated.py` and tested in `tests/`. Mention this in the Milestone 1 report.
 
 ## Research question
 
-In a six-client federated IDS trained on non-IID partitions of CICIoT2023, how much global detection performance is lost when one client performs a label-flipping attack, and does robust aggregation recover it?
+In a four-client federated IDS trained on non-IID partitions of CICIoT2023, how much global detection performance is lost when one client performs a label-flipping attack, and does robust aggregation recover it?
 
 **Expectation (falsifiable):** Under FedAvg, global macro F1 falls by more than 3 points versus the clean run, and trimmed-mean aggregation recovers at least half of that loss. Smaller effects would falsify this.
 
 ## Experimental conditions
 
-1. Centralized reference model on pooled training data
-2. Clean federated baseline: FedAvg on non-IID and IID partitions
-3. Poisoned: one of six clients relabels 50% of its attack samples as benign each round
-4. Robust aggregation: trimmed mean on the poisoned and clean non-IID setups
+| # | Condition | Config |
+|---|---|---|
+| 1 | Centralized reference on pooled training data | `configs/centralized.yaml` |
+| 2a | Clean FedAvg, IID split (control) | `configs/fedavg_iid.yaml` |
+| 2b | Clean FedAvg, non-IID split | `configs/fedavg_noniid.yaml` |
+| 3 | FedAvg, non-IID, one label-flipping client | `configs/fedavg_noniid_poisoned.yaml` |
+| 4a | Trimmed mean, non-IID, clean | `configs/trimmed_noniid.yaml` |
+| 4b | Trimmed mean, non-IID, one label-flipping client | `configs/trimmed_noniid_poisoned.yaml` |
 
-Extensions if time allows: local-only models, median aggregation.
+Extensions if time allows: local-only models, median aggregation (`federated.aggregation: median` is already implemented).
 
-## Planned repository layout
+## Repository layout
 
 ```
 .
-├── data/               # Not committed. Raw and processed CICIoT2023 files go here.
-│   ├── raw/
-│   └── processed/
-├── src/                # Subset, split, partition, model, and FL code
-├── configs/            # Experiment settings (seeds, rounds, clients, aggregation)
-├── notebooks/          # Exploration only; results come from scripts
-├── results/            # Metrics, plots, logs from each run
-├── reports/            # PDF milestone reports and slides
-├── requirements.txt    # Pinned dependencies
+├── configs/
+│   ├── default.yaml              # all shared settings; experiment files override a few keys
+│   └── *.yaml                    # one file per experimental condition
+├── data/                         # not committed
+│   ├── raw/                      # CICIoT2023 CSVs go here
+│   └── processed/                # train_pool / val / test parquet + partitions/
+├── src/
+│   ├── common.py                 # shared: config, label mapping, data loading, MLP, training, metrics
+│   ├── prepare_data.py           # step 1: subset, splits, k-means / IID client partitions
+│   ├── train_centralized.py      # step 2: condition 1
+│   ├── run_federated.py          # step 3: conditions 2-4 (FL loop, label flipping, FedAvg / trimmed mean / median)
+│   └── summarize_results.py      # step 4: mean/std table + convergence plot
+├── tests/                        # pytest unit tests
+├── notebooks/                    # exploration only; reported numbers come from scripts
+├── results/                      # run outputs (git-ignored)
+├── reports/                      # proposal, milestone reports, slides
+├── requirements.txt              # pinned dependencies
 └── README.md
 ```
 
 ## Setup
 
-Requires Python 3.10 or newer.
+Requires Python 3.11, 3.12 or 3.13.
 
 ```bash
-git clone https://github.com/<user-or-org>/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/Jreyna4/CSCI-6330-Foundation-Security-Systems-Course-Project.git
+cd CSCI-6330-Foundation-Security-Systems-Course-Project
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
+# Linux only, optional: CPU-only PyTorch avoids a ~2 GB CUDA download
+pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+
 pip install -r requirements.txt
+pytest                           # unit tests, no dataset needed
 ```
-
-Core dependencies (exact versions will be pinned in `requirements.txt`):
-
-- PyTorch
-- Flower (`flwr[simulation]`)
-- scikit-learn
-- pandas, NumPy, Matplotlib
 
 ## Data
 
 This repository does **not** include the dataset.
 
-1. Download CICIoT2023 from the Canadian Institute for Cybersecurity:
+1. Download the CSV files of CICIoT2023 from the Canadian Institute for Cybersecurity:
    https://www.unb.ca/cic/datasets/iotdataset-2023.html
 2. Place the CSV files in `data/raw/`.
 
 Notes:
 
 - The official page states no license and asks for citation. We use it for coursework research only (accessed Sep. 20, 2026).
-- We build a documented stratified subset of about 300,000 flows and collapse the 33 attack types into 7 families plus benign: DDoS, DoS, Recon, Web-based, Brute force, Spoofing, Mirai.
-- Identifier fields (IPs, ports, timestamps, row indices), if present, are dropped to prevent shortcut learning.
+- We build a documented subset of about 300,000 flows and collapse the 33 attack types into 7 families plus benign: DDoS, DoS, Recon, Web-based, Brute force, Spoofing, Mirai. Rare families are kept whole and common ones are capped at `data.max_per_class` rows. The exact counts are written to `data/processed/subset_summary.json`.
+- Identifier fields (IPs, ports, timestamps, row indices), if present, are dropped to prevent shortcut learning (`data.drop_cols`).
+- For a quick test, set `data.max_files: 2` in `configs/default.yaml` to read only two CSVs.
+
+## How to run
+
+```bash
+# 1. Subset, splits and client partitions (k-means and IID, 4 clients) + leakage report
+python src/prepare_data.py
+#    After changing num_clients, redo only the partitions:
+#    python src/prepare_data.py --partitions-only
+
+# 2. Centralized reference
+python src/train_centralized.py
+
+# 3. Federated conditions
+python src/run_federated.py --config configs/fedavg_iid.yaml
+python src/run_federated.py --config configs/fedavg_noniid.yaml
+python src/run_federated.py --config configs/fedavg_noniid_poisoned.yaml
+python src/run_federated.py --config configs/trimmed_noniid.yaml
+python src/run_federated.py --config configs/trimmed_noniid_poisoned.yaml
+
+# 4. Table (results/summary.csv) and convergence plot
+python src/summarize_results.py
+```
+
+Each run writes `results/<experiment>/seed_<seed>.json`. Add `--seeds 42` for a single quick run. Scripts report **validation** metrics only. Add `--final` to also evaluate on the test set; do that once, after all settings are frozen.
 
 ## Reproducibility
 
-- Hold out a stratified 20% test set and 10% validation set first (seed 42). The test set is used only for final reporting; all settings are chosen on validation.
-- The remaining 70% is split into six simulated clients with k-means (k = 6, seed 42) on standardized features fit on that pool only. No labels are used to build the partition. An IID split is the control.
-- Each condition runs 30 rounds, one local epoch, all six clients participating, with 3 seeds (report mean and standard deviation).
-- Every reported number will have a script and command listed here.
-
-Run commands will be added as the code is written:
-
-```bash
-# Example placeholders
-python src/make_subset.py
-python src/make_partitions.py
-python src/train_centralized.py
-python src/run_federated.py --config configs/fedavg_noniid.yaml
-```
+- A stratified 20% test set and 10% validation set are held out first (seed 42). The test set is used only for final reporting; all settings are chosen on validation.
+- The remaining 70% is split into four simulated clients with k-means (k = 4, seed 42) on standardized features fit on that pool only. No labels are used to build the partition. An IID split is the control.
+- `src/prepare_data.py` prints per-client family counts and the client-label mutual information, and saves them next to each partition (`data/processed/partitions/*.json`). It warns if a client gets less than 5% of the pool.
+- Each condition runs 30 rounds, one local epoch, all four clients participating, with 3 seeds (report mean and standard deviation).
 
 ## Evaluation
 
-Primary metric: macro F1 on the global test set. Also reported: per-class precision, recall, and FNR; FPR; PR-AUC; confusion matrices; per-round performance; client-level dispersion; bytes per round; runtime.
+Primary metric: macro F1 on the global test set. Also reported: per-class precision, recall, and FNR; benign-vs-attack FPR and FNR; PR-AUC; confusion matrices; per-round performance; client-level dispersion; bytes per round; runtime and memory.
+
+## Open decisions (TODO)
+
+- Which client is the attacker (`attack.attacker_clients`). With k-means, clients differ in how many attack rows they hold, so pick one deliberately (for example the client with the most attack rows) and justify it, or run each client as the attacker.
+- `data.max_per_class`: check the resulting family counts after the first `prepare_data.py` run.
+- Check timing-like features (for example `IAT`) for shortcut behavior before training; list anything dropped in `data.drop_cols`.
+- Model selection: scripts currently keep the model from the last epoch / round.
 
 ## Milestones
 
