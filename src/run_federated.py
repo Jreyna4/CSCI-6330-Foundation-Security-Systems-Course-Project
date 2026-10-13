@@ -18,19 +18,102 @@ Usage:
 
 import argparse
 import time
+import warnings
 
 import numpy as np
 import torch
 
-from aggregation import aggregate
-from attacks import flip_labels
-from common import get_device, load_config, repo_path, rss_mb, save_json, set_seed
-from data import load_all, load_partition
-from engine import get_weights, make_loader, predict_proba, set_weights, train_epochs
-from labels import FAMILIES, FAMILY_TO_ID
-from metrics import compute_metrics
-from model import build_model
+from common import (
+    FAMILIES,
+    FAMILY_TO_ID,
+    build_model,
+    compute_metrics,
+    get_device,
+    get_weights,
+    load_all,
+    load_config,
+    load_partition,
+    make_loader,
+    predict_proba,
+    repo_path,
+    rss_mb,
+    save_json,
+    set_seed,
+    set_weights,
+    train_epochs,
+)
 
+
+# --- Attack: label flipping ---------------------------------------------------
+# A malicious client relabels a fraction of its attack rows as benign before
+# training. The flipped set is drawn once per run (seeded) and used in every
+# round. Only the attacker's local copy of the labels changes; evaluation
+# always uses clean labels.
+
+def flip_labels(y, flip_fraction, target_id, rng):
+    """Return (poisoned copy of y, number of flipped rows)."""
+    y = y.copy()
+    candidates = np.flatnonzero(y != target_id)
+    n_flip = int(round(flip_fraction * len(candidates)))
+    idx = rng.choice(candidates, size=n_flip, replace=False)
+    y[idx] = target_id
+    return y, n_flip
+
+
+# --- Aggregation rules --------------------------------------------------------
+# Each rule takes `updates`, a list of (weights, num_examples) pairs where
+# weights is a list of numpy arrays (one per model tensor), and returns the
+# new global weights in the same format.
+
+def fedavg(updates):
+    """FedAvg (McMahan et al., 2017): mean weighted by client dataset size."""
+    total = sum(n for _, n in updates)
+    return [
+        sum(w[i] * n for w, n in updates) / total
+        for i in range(len(updates[0][0]))
+    ]
+
+
+def trimmed_mean(updates, beta):
+    """Coordinate-wise trimmed mean (Yin et al., 2018).
+
+    For every parameter, drop the k = floor(beta * n) largest and k smallest
+    client values, then average the rest (unweighted). With n = 4 clients,
+    beta = 0.25 gives k = 1.
+    """
+    n = len(updates)
+    k = int(np.floor(beta * n + 1e-9))
+    if 2 * k >= n:
+        raise ValueError(f"trim_beta={beta} trims all {n} clients")
+    if k == 0:
+        warnings.warn(f"trim_beta={beta} trims nothing with {n} clients (plain mean)")
+    out = []
+    for i in range(len(updates[0][0])):
+        stacked = np.sort(np.stack([w[i] for w, _ in updates]), axis=0)
+        out.append(stacked[k : n - k].mean(axis=0))
+    return out
+
+
+def median(updates):
+    """Coordinate-wise median (extension condition)."""
+    return [
+        np.median(np.stack([w[i] for w, _ in updates]), axis=0)
+        for i in range(len(updates[0][0]))
+    ]
+
+
+def aggregate(updates, cfg_fed):
+    rule = cfg_fed["aggregation"]
+    if rule == "fedavg":
+        return fedavg(updates)
+    if rule == "trimmed_mean":
+        return trimmed_mean(updates, cfg_fed["trim_beta"])
+    if rule == "median":
+        return median(updates)
+    raise ValueError(f"Unknown aggregation rule: {rule}")
+
+
+# --- Federated simulation -----------------------------------------------------
 
 def build_clients(cfg, X, y, client_ids, rng):
     atk = cfg["attack"]
@@ -125,7 +208,7 @@ def main():
     data = load_all(cfg)
     client_ids = load_partition(cfg)
     if len(client_ids) != len(data["train"][1]):
-        raise ValueError("Partition does not match train_pool. Re-run src/make_partitions.py.")
+        raise ValueError("Partition does not match train_pool. Re-run src/prepare_data.py.")
     num_clients = cfg["partition"]["num_clients"]
     if cfg["attack"]["enabled"] and any(c >= num_clients for c in cfg["attack"]["attacker_clients"]):
         raise ValueError(f"attacker_clients must be < num_clients ({num_clients})")

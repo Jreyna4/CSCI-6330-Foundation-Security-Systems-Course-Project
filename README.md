@@ -12,18 +12,18 @@ Course project for **CSCI 6330: Foundations of Intelligent Security Systems** (F
 - Joe Reyna
 - April Flores
 
-| Area | Owner | Main files |
+| Area | Owner | Main file |
 |---|---|---|
-| Data preparation (subset, splits, client partitions) | TBD | `src/labels.py`, `src/make_subset.py`, `src/make_partitions.py` |
-| Centralized reference model | TBD | `src/model.py`, `src/train_centralized.py` |
-| Federated baseline (FedAvg, IID and non-IID) | TBD | `src/run_federated.py`, `src/aggregation.py` |
-| Attack (label flipping) and defense (trimmed mean) | TBD | `src/attacks.py`, `src/aggregation.py` |
+| Data preparation (subset, splits, client partitions) | TBD | `src/prepare_data.py` |
+| Centralized reference model | TBD | `src/train_centralized.py` |
+| Federated baseline (FedAvg, IID and non-IID) | TBD | `src/run_federated.py` (simulation loop, `fedavg`) |
+| Attack (label flipping) and defense (trimmed mean) | TBD | `src/run_federated.py` (`flip_labels`, `trimmed_mean`) |
 
 ## Changes since the proposal
 
 - **Four clients instead of six.** The instructor said k = 6 was too many, so the k-means partition now uses k = 4 (`partition.num_clients` in `configs/default.yaml`). With one attacker, that is 1 of 4 clients (25%) instead of 1 of 6.
 - **Trimmed mean setting.** With 4 clients, `trim_beta = 0.25` trims the single highest and lowest value per coordinate. A smaller beta (for example 0.2) trims nothing at 4 clients and is just a plain mean.
-- **Federated framework.** The FL loop is a small single-process simulation in `src/run_federated.py` instead of Flower. The project spec allows "a clearly documented minimal simulation written by the team", and Flower 1.39 has deprecated its `run_simulation()` API in favor of a SuperLink-based setup. FedAvg, trimmed mean and median are implemented in `src/aggregation.py` and tested in `tests/`. Mention this in the Milestone 1 report.
+- **Federated framework.** The FL loop is a small single-process simulation in `src/run_federated.py` instead of Flower. The project spec allows "a clearly documented minimal simulation written by the team", and Flower 1.39 has deprecated its `run_simulation()` API in favor of a SuperLink-based setup. FedAvg, trimmed mean and median are implemented in `src/run_federated.py` and tested in `tests/`. Mention this in the Milestone 1 report.
 
 ## Research question
 
@@ -55,19 +55,11 @@ Extensions if time allows: local-only models, median aggregation (`federated.agg
 │   ├── raw/                      # CICIoT2023 CSVs go here
 │   └── processed/                # train_pool / val / test parquet + partitions/
 ├── src/
-│   ├── common.py                 # config loading, seeding, paths
-│   ├── labels.py                 # 33 attack labels -> 7 families + benign
-│   ├── make_subset.py            # subset + stratified train_pool / val / test split
-│   ├── data.py                   # loading + preprocessing (log1p + standardize)
-│   ├── make_partitions.py        # k-means (non-IID) and IID client splits + leakage report
-│   ├── model.py                  # the MLP used everywhere
-│   ├── engine.py                 # train / predict / get and set weights
-│   ├── metrics.py                # macro F1, FPR, FNR, PR-AUC, confusion matrix
-│   ├── attacks.py                # label flipping
-│   ├── aggregation.py            # FedAvg, trimmed mean, median
-│   ├── train_centralized.py      # condition 1
-│   ├── run_federated.py          # conditions 2-4
-│   └── summarize_results.py      # mean/std table + convergence plot
+│   ├── common.py                 # shared: config, label mapping, data loading, MLP, training, metrics
+│   ├── prepare_data.py           # step 1: subset, splits, k-means / IID client partitions
+│   ├── train_centralized.py      # step 2: condition 1
+│   ├── run_federated.py          # step 3: conditions 2-4 (FL loop, label flipping, FedAvg / trimmed mean / median)
+│   └── summarize_results.py      # step 4: mean/std table + convergence plot
 ├── tests/                        # pytest unit tests
 ├── notebooks/                    # exploration only; reported numbers come from scripts
 ├── results/                      # run outputs (git-ignored)
@@ -112,23 +104,22 @@ Notes:
 ## How to run
 
 ```bash
-# 1. Subset and splits (writes data/processed/)
-python src/make_subset.py
+# 1. Subset, splits and client partitions (k-means and IID, 4 clients) + leakage report
+python src/prepare_data.py
+#    After changing num_clients, redo only the partitions:
+#    python src/prepare_data.py --partitions-only
 
-# 2. Client partitions: k-means (non-IID) and IID, 4 clients, plus leakage report
-python src/make_partitions.py
-
-# 3. Centralized reference
+# 2. Centralized reference
 python src/train_centralized.py
 
-# 4. Federated conditions
+# 3. Federated conditions
 python src/run_federated.py --config configs/fedavg_iid.yaml
 python src/run_federated.py --config configs/fedavg_noniid.yaml
 python src/run_federated.py --config configs/fedavg_noniid_poisoned.yaml
 python src/run_federated.py --config configs/trimmed_noniid.yaml
 python src/run_federated.py --config configs/trimmed_noniid_poisoned.yaml
 
-# 5. Table (results/summary.csv) and convergence plot
+# 4. Table (results/summary.csv) and convergence plot
 python src/summarize_results.py
 ```
 
@@ -138,7 +129,7 @@ Each run writes `results/<experiment>/seed_<seed>.json`. Add `--seeds 42` for a 
 
 - A stratified 20% test set and 10% validation set are held out first (seed 42). The test set is used only for final reporting; all settings are chosen on validation.
 - The remaining 70% is split into four simulated clients with k-means (k = 4, seed 42) on standardized features fit on that pool only. No labels are used to build the partition. An IID split is the control.
-- `src/make_partitions.py` prints per-client family counts and the client-label mutual information, and saves them next to each partition (`data/processed/partitions/*.json`). It warns if a client gets less than 5% of the pool.
+- `src/prepare_data.py` prints per-client family counts and the client-label mutual information, and saves them next to each partition (`data/processed/partitions/*.json`). It warns if a client gets less than 5% of the pool.
 - Each condition runs 30 rounds, one local epoch, all four clients participating, with 3 seeds (report mean and standard deviation).
 
 ## Evaluation
@@ -148,7 +139,7 @@ Primary metric: macro F1 on the global test set. Also reported: per-class precis
 ## Open decisions (TODO)
 
 - Which client is the attacker (`attack.attacker_clients`). With k-means, clients differ in how many attack rows they hold, so pick one deliberately (for example the client with the most attack rows) and justify it, or run each client as the attacker.
-- `data.max_per_class`: check the resulting family counts after the first `make_subset.py` run.
+- `data.max_per_class`: check the resulting family counts after the first `prepare_data.py` run.
 - Check timing-like features (for example `IAT`) for shortcut behavior before training; list anything dropped in `data.drop_cols`.
 - Model selection: scripts currently keep the model from the last epoch / round.
 
