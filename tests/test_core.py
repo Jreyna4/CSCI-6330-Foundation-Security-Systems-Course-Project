@@ -46,6 +46,20 @@ def test_mapping_is_case_insensitive():
     assert to_family("VULNERABILITYSCAN") == "Recon"
 
 
+def test_merged_csv_spellings():
+    # Labels as written in the MERGED_CSV release of CICIoT2023.
+    assert to_family("BENIGN") == "Benign"
+    assert to_family("DDOS-SYNONYMOUSIP_FLOOD") == "DDoS"
+    assert to_family("DOS-HTTP_FLOOD") == "DoS"
+    assert to_family("MITM-ARPSPOOFING") == "Spoofing"
+    assert to_family("DNS_SPOOFING") == "Spoofing"
+    assert to_family("DICTIONARYBRUTEFORCE") == "BruteForce"
+    assert to_family("BACKDOOR_MALWARE") == "Web"
+    assert to_family("RECON-PINGSWEEP") == "Recon"
+    assert to_family("MIRAI-GREIP_FLOOD") == "Mirai"
+    assert to_family("DDoS-Some_New_Variant") == "DDoS"  # prefix fallback
+
+
 def test_unknown_label_raises():
     with pytest.raises(ValueError):
         to_family("NotARealLabel")
