@@ -1,7 +1,5 @@
 # Condition 4a: trimmed mean on the clean non-IID split (cost of the defense
 # when nobody is attacking).
 experiment: trimmed_noniid
-partition:
-  method: kmeans
 federated:
   aggregation: trimmed_mean
