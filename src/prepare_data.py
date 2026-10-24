@@ -95,6 +95,15 @@ def read_raw(cfg):
         df.columns = [c.strip() for c in df.columns]
         raw_rows += len(df)
         raw_label_counts = raw_label_counts.add(df["label"].value_counts(), fill_value=0)
+        unknown = []
+        for lab in df["label"].dropna().unique():
+            try:
+                to_family(lab)
+            except ValueError:
+                unknown.append(lab)
+        if unknown:
+            raise ValueError(f"{path.name}: unknown labels {sorted(map(str, unknown))}. "
+                             "Add them to LABEL_TO_FAMILY in src/common.py.")
         df["family"] = df["label"].map(to_family)
         df = cap_per_family(df, per_file_cap, seed=cfg["data"]["seed"] + i)
         df["source_file"] = path.name
