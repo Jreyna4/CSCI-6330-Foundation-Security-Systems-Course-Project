@@ -1,0 +1,228 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\def\UrlFont{\footnotesize\ttfamily}
+
+% Placeholder for numbers that come from running the pipeline on the real
+% data. Search the file for \tbd before submitting; none should remain.
+\newcommand{\tbd}[1]{\textcolor{red}{[#1]}}
+
+\begin{document}
+
+\title{Milestone 1: Federated Intrusion Detection Under Label-Flipping Poisoning on CICIoT2023}
+
+\author{
+\IEEEauthorblockN{Salvador Leon Lopez, Elena Victoria Sanchez, Joe Reyna, April Flores (Group 8)}
+\IEEEauthorblockA{Department of Computer Science, The University of Texas Rio Grande Valley\\
+CSCI 6330: Foundations of Intelligent Security Systems, Fall 2026}
+}
+
+\maketitle
+
+\section{Research Question}
+Organizations that each see different attack traffic could train a shared
+intrusion detector with federated learning (FL) without pooling raw captures
+\cite{mcmahan2017}, but the server cannot inspect client data, so a
+compromised participant can poison the shared model \cite{tolpegin2020}.
+
+\textbf{RQ:} In a ten-client federated IDS trained on non-IID partitions of
+CICIoT2023, how much global detection performance is lost when one client
+performs a label-flipping attack, and does coordinate-wise trimmed-mean
+aggregation \cite{yin2018} recover it?
+
+\textbf{Expectation (falsifiable):} Under FedAvg, global macro F1 falls by
+more than 3 points versus the paired clean run, and trimmed mean recovers at
+least half of that loss. Smaller effects falsify it. Because label flipping
+need not produce coordinate-wise extreme updates, weak recovery would itself
+be a meaningful result. A secondary question varies the malicious share
+(1, 2 and 3 of 10 clients).
+
+\section{Dataset Selection}
+
+\subsection{Why CICIoT2023}
+CICIoT2023 \cite{neto2023} provides labeled flows with 46 numeric features
+from 33 attacks on a 105-device IoT testbed, grouped by its authors into seven
+families. It is recent, multi-class and heavily imbalanced, which makes macro
+F1 and per-family miss rates informative. Its page states no license and asks
+for citation; we use it for coursework only (accessed Sep.~20, 2026). It is
+single-testbed lab data, so our clients are \emph{simulated} and all
+heterogeneity is \emph{simulated statistical heterogeneity}, not evidence
+about real organizations.
+
+\subsection{Label Families}
+Table~\ref{tab:families} gives our mapping, which follows the authors'
+taxonomy; a unit test checks the family sizes and matching is
+case-insensitive.
+
+\begin{table}[t]
+\caption{Label mapping and subset counts}
+\label{tab:families}
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lp{3.3cm}rr@{}}
+\toprule
+Family & Original labels (count) & Raw rows & Subset \\
+\midrule
+Benign & BenignTraffic (1) & \tbd{X} & \tbd{X} \\
+DDoS & 12 floods and fragmentations & \tbd{X} & \tbd{X} \\
+DoS & UDP, SYN, TCP, HTTP floods (4) & \tbd{X} & \tbd{X} \\
+Recon & 4 Recon-* + VulnerabilityScan (5) & \tbd{X} & \tbd{X} \\
+Web & SQLi, XSS, CmdInj, Upload, Backdoor, BrowserHijack (6) & \tbd{X} & \tbd{X} \\
+BruteForce & DictionaryBruteForce (1) & \tbd{X} & \tbd{X} \\
+Spoofing & DNS, MITM-ARP (2) & \tbd{X} & \tbd{X} \\
+Mirai & greeth, greip, udpplain (3) & \tbd{X} & \tbd{X} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Subset and Split Procedure}
+The order is fixed and scripted (\texttt{prepare\_data.py}):
+(1)~read all \tbd{N} CSV files and record label counts \emph{before} sampling;
+(2)~sample at most $\lceil 2\cdot45{,}000/N\rceil$ rows per family per file
+so every capture file contributes;
+(3)~drop rows with inf/NaN (\tbd{n}), exact feature+label duplicates
+(\tbd{n}) and feature vectors with conflicting labels (\tbd{n});
+(4)~cap each family at 45{,}000 rows, keeping rarer families whole
+(\tbd{total} rows). The subset is therefore closer to balanced than the raw
+data; we report both prevalences and never present the subset's as natural;
+(5)~hold out 20\% test and 10\% validation, stratified by family and
+\emph{grouped by source file}, so no file contributes rows to two splits
+(the CSVs expose no device or session field, so the file is the finest
+capture grouping available). Only then are the scaler and partitioners fit,
+on the 70\% training pool. Output hashes are stored in a manifest so every
+run can be traced to the exact data.
+
+\subsection{Client Partitions}
+Following the feedback, we use ten clients and a controlled \textbf{Dirichlet}
+label-skew split as the primary non-IID setting \cite{hsu2019}: for each
+family, client shares are drawn from $\mathrm{Dir}(\alpha{=}0.5)$, redrawn
+until every client holds $\geq$2\% of the pool. The label-free k-means
+partition ($k{=}10$) from the proposal is retained as a reported alternative,
+and an IID split is the control. Validation and test rows are assigned to
+clients with the \emph{frozen} train-time partitioner (Dirichlet proportions,
+or k-means scaler and centroids), never refit, so per-client held-out
+evaluation is possible. For every client we report size, benign share,
+family counts, label purity, and total-variation distance from the global
+distribution, and check: share $\geq$2\%, size ratio $\leq$20, purity
+$\leq$95\%, and $\geq$2 families with $\geq$50 rows (Table~\ref{tab:clients}).
+
+\begin{table}[t]
+\caption{Partition checks (training pool, 10 clients)}
+\label{tab:clients}
+\centering\footnotesize
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & Dirichlet & k-means & IID \\
+\midrule
+Smallest / largest client (rows) & \tbd{X} & \tbd{X} & \tbd{X} \\
+Max label purity & \tbd{X} & \tbd{X} & \tbd{X} \\
+Mean TV distance from global & \tbd{X} & \tbd{X} & \tbd{X} \\
+Normalized client--label MI & \tbd{X} & \tbd{X} & \tbd{X} \\
+Checks & \tbd{PASS/FAIL} & \tbd{X} & \tbd{X} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Tool Choices and Method}
+
+\subsection{Tools}
+Python 3.11--3.13, PyTorch, scikit-learn and pandas, with pinned versions.
+The FL loop is a single-process simulation written by the team
+(\texttt{run\_federated.py}), which the project specification permits,
+instead of Flower \cite{beutel2020}: Flower~1.39 deprecated its
+\texttt{run\_simulation()} API, and a short loop makes every aggregation
+step inspectable. FedAvg, trimmed mean and median are unit-tested.
+\tbd{Hardware: CPU/GPU, RAM}. All runtimes are single-machine simulation time.
+
+\subsection{Model and Training}
+One MLP is held constant across all conditions: 46 inputs (signed log
+transform, then standardization fit on the training pool), hidden layers of
+128 and 64 units with ReLU and dropout 0.1, and 8 output logits (14{,}792
+parameters). Loss is unweighted cross-entropy; Adam, learning rate
+$10^{-3}$, batch size 256. The centralized reference trains 30 epochs; FL
+runs 30 rounds of one local epoch with all ten clients each round and a fresh
+optimizer state per round. The final epoch/round model is evaluated.
+
+\subsection{Threat Model and Defense}
+The attacker is the client with the most attack rows in the frozen training
+partition (identical for every seed and condition) and must hold $\geq$2
+attack families with $\geq$100 rows each. It relabels 50\% of its attack rows
+\emph{within each family} as benign; the poisoned set is drawn once per seed
+and reused every round. It changes labels only and otherwise behaves honestly.
+Trimmed mean uses $\beta{=}0.2$: per coordinate, the $\lfloor 0.2\cdot10\rfloor{=}2$
+highest and 2 lowest client values are removed and the remaining 6 averaged
+without size weighting. It is also run without attack, since heterogeneous
+honest clients can look like outliers.
+
+\subsection{Conditions, Seeds and Metrics}
+(1)~Centralized; (2a/2b)~clean FedAvg, IID and non-IID; (3)~FedAvg with one
+attacker; (4a/4b)~trimmed mean, clean and attacked; plus 2 and 3 attackers.
+The data seed (42) fixes records, splits and partitions for all runs. Each run
+seed (42--44) changes only model initialization, minibatch order and the
+poisoned draw, so conditions with the same seed start from identical weights
+and are compared as paired differences; we report individual runs as well as
+mean and standard deviation. The primary metric is global test macro F1, with
+per-family precision, recall, FNR and FPR (each with support), binary
+benign-vs-attack FPR/FNR, PR-AUC, per-client held-out macro F1, and
+communication: 59.2\,kB per client per round in each direction, 1.18\,MB per
+round and 35.5\,MB per run (raw float32, downloads included).
+
+\section{Response to Proposal Feedback}
+\begin{table}[t]
+\caption{Feedback and changes}
+\label{tab:feedback}
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{2.6cm}p{5.5cm}@{}}
+\toprule
+Feedback & Change \\
+\midrule
+k-means clusters may be unequal or label-pure & Dirichlet split is primary; per-client reports and checks for every partition \\
+Use 10--20 clients; vary malicious share & 10 clients; 1, 2, 3 attackers \\
+Dedup and grouping before split; freeze partitioner & Duplicates removed first; file-grouped split; frozen held-out assignment \\
+Global and client-level evaluation with support & Per-client held-out metrics; support on every rate \\
+Deterministic attack & Fixed attacker, fixed per-seed poisoned set, labels only \\
+Specify trimmed mean & $\beta{=}0.2$: 2 dropped per side, unweighted mean of 6 \\
+Paired factors and seeds & Fixed data seed; identical initial weights per seed; paired deltas \\
+Pilot, mapping, counts, hyperparameters & Pilot configuration; Table~\ref{tab:families}; Section~III-B \\
+Communication and hardware & Bytes per client, per round and per run; hardware logged \\
+\bottomrule
+\end{tabular}
+\end{table}
+Table~\ref{tab:feedback} summarizes how each point of the feedback was
+addressed. The largest design change is the move from six k-means clients to
+ten Dirichlet clients; k-means remains as an alternative so the effect of the
+partition can still be discussed.
+
+\section{Status and Next Steps}
+\textbf{Done:} the full pipeline (subset, splits, three partitioners with
+checks, centralized model, FL loop, attack, FedAvg, trimmed mean, median,
+summary tables) is implemented, and 22 unit and end-to-end tests pass.
+\tbd{Pilot (12 files, 5 rounds): centralized validation macro F1 = X;
+FedAvg IID = X, non-IID = X.} \tbd{Full subset: centralized validation macro
+F1 = X; lowest per-family F1: family X.}
+\textbf{Next (Milestone 2, Nov.~15):} run clean FedAvg on the full data with
+three seeds, then conditions 3, 4a and 4b and the attacker sweep, reporting
+paired differences. The test set is used once, after all settings are frozen.
+\textbf{Limitations:} single-testbed lab data; simulated clients; a capped
+subset whose prevalence differs from the raw data; three seeds support
+paired comparisons, not distributional claims.
+
+\footnotesize
+\begin{thebibliography}{00}
+\itemsep 0pt
+\bibitem{mcmahan2017} B. McMahan \emph{et al.}, ``Communication-efficient learning of deep networks from decentralized data,'' \emph{Proc. AISTATS}, 2017.
+\bibitem{tolpegin2020} V. Tolpegin, S. Truex, M. E. Gursoy, and L. Liu, ``Data poisoning attacks against federated learning systems,'' \emph{Proc. ESORICS}, 2020.
+\bibitem{yin2018} D. Yin, Y. Chen, K. Ramchandran, and P. Bartlett, ``Byzantine-robust distributed learning,'' \emph{Proc. ICML}, 2018.
+\bibitem{neto2023} E. C. P. Neto \emph{et al.}, ``CICIoT2023: A real-time dataset and benchmark for large-scale attacks in IoT environment,'' \emph{Sensors}, vol.~23, no.~13, 2023.
+\bibitem{hsu2019} T.-M. H. Hsu, H. Qi, and M. Brown, ``Measuring the effects of non-identical data distribution for federated visual classification,'' arXiv:1909.06335, 2019.
+\bibitem{beutel2020} D. J. Beutel \emph{et al.}, ``Flower: A friendly federated learning framework,'' arXiv:2007.14390, 2020.
+\end{thebibliography}
+
+\end{document}

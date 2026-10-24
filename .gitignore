@@ -16,6 +16,10 @@ data/processed/*
 results/*
 !results/.gitkeep
 
+# Pilot run outputs (configs/pilot.yaml)
+results_pilot/
+data/processed_pilot/
+
 # LaTeX build files
 *.aux
 *.bbl
