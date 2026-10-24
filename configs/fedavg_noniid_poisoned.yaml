@@ -1,7 +1,6 @@
-# Condition 3: FedAvg on the non-IID split with one label-flipping client.
+# Condition 3: FedAvg on the non-IID split with label-flipping client(s)
+# (attack.num_attackers, default 1 of 10).
 experiment: fedavg_noniid_poisoned
-partition:
-  method: kmeans
 federated:
   aggregation: fedavg
 attack:

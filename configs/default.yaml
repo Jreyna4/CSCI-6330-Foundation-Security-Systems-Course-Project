@@ -1,5 +1,6 @@
 # Shared defaults. Every experiment file in configs/ overrides only the keys it
-# changes; src/common.py merges it on top of this file.
+# changes; src/common.py merges it on top of this file. Several files can be
+# stacked: --config configs/pilot.yaml configs/fedavg_noniid.yaml
 
 experiment: default
 
@@ -9,43 +10,72 @@ paths:
   results_dir: results
 
 data:
-  seed: 42                 # fixes the subset, the splits and the partitions
-  label_col: label         # column name in the CICIoT2023 CSV files
-  max_per_class: 45000     # keep all rows of rare families, cap common ones (~300k total)
-  max_files: null          # read only the first N raw CSVs (for quick tests); null = all
+  seed: 42                 # fixes the subset, splits and partitions for EVERY run
+  label_col: label         # matched case-insensitively (label / Label)
+  max_per_class: 45000     # cap per family; rarer families kept whole (~300k total)
+  per_file_oversample: 2   # per-file cap = ceil(2 * max_per_class / n_files) rows per family
+  max_files: null          # read only the first N raw CSVs (quick tests); null = all
   test_frac: 0.20
   val_frac: 0.10
-  # Identifier / shortcut columns to drop before training. CICIoT2023's CSVs
-  # have no IPs, ports or timestamps, but check timing-like features (e.g. IAT)
-  # for shortcut behavior and list anything you drop here and in the report.
+  group_split: true        # hold out whole source CSV files (no file in two splits)
+  drop_conflicting_duplicates: true  # drop identical feature vectors with different labels
+  # Identifier / shortcut columns dropped before anything else. CICIoT2023's
+  # CSVs have no IPs, ports or timestamps. Check timing-like features (e.g.
+  # IAT) for shortcut behavior and list anything you drop here and in the report.
   drop_cols: []
   log_transform: true      # sign(x) * log1p(|x|) before standardizing (features are heavy-tailed)
 
 partition:
-  method: kmeans           # kmeans (non-IID, label-free) | iid (control)
-  num_clients: 4           # was 6 in the proposal; instructor asked for fewer
+  # Non-IID method used by the non-IID experiment configs. prepare_data.py
+  # builds and checks ALL methods (dirichlet, kmeans, iid) every time.
+  #   dirichlet : per-family client proportions ~ Dir(alpha) (Hsu et al., 2019).
+  #               Controlled label skew; the primary non-IID split.
+  #   kmeans    : label-free feature clusters; kept as a reported alternative.
+  #   iid       : random equal split (control).
+  method: dirichlet
+  num_clients: 10          # instructor feedback: 10-20 clients
+  dirichlet_alpha: 0.5     # smaller = more skew (0.1 extreme, 1.0 mild)
+  # Partition checks (prepare_data.py prints PASS/FAIL per method):
+  min_client_share: 0.02   # every client >= 2% of the training pool
+  max_size_ratio: 20       # largest / smallest client
+  max_label_purity: 0.95   # no client with > 95% of rows in one family
+  min_family_rows: 50      # a family "counts" for a client at >= 50 rows
 
 model:
-  hidden_sizes: [128, 64]
+  hidden_sizes: [128, 64]  # Linear-ReLU-Dropout per hidden layer, then Linear to 8 logits
   dropout: 0.1
 
 train:
-  batch_size: 256
+  optimizer: adam          # Adam, default betas (0.9, 0.999), eps 1e-8
   lr: 0.001
+  weight_decay: 0.0
+  batch_size: 256          # also the local batch size of every client
   epochs: 30               # centralized only
   local_epochs: 1          # federated: epochs per client per round
+  # Loss: unweighted cross-entropy. Federated clients get a fresh Adam state
+  # every round. Model selection: last epoch / last round (no early stopping).
 
 federated:
   rounds: 30
   aggregation: fedavg      # fedavg | trimmed_mean | median
-  # Fraction trimmed from EACH end per coordinate. With 4 clients, 0.25 trims
-  # 1 high + 1 low value. Anything below 0.25 trims nothing at 4 clients.
-  trim_beta: 0.25
+  # Fraction trimmed from EACH end per coordinate: k = floor(beta * n).
+  # With 10 clients, 0.2 trims 2 high + 2 low values and averages the middle
+  # 6 (unweighted). Tolerates up to 2 attackers.
+  trim_beta: 0.2
 
 attack:
   enabled: false
-  attacker_clients: [0]    # TODO: pick and justify which client is malicious
+  num_attackers: 1         # 1 of 10 = 10%; sweep 1-3 to vary the malicious ratio
+  selection: most_attack_rows  # deterministic, same clients for every seed | fixed
+  attacker_clients: []     # used only when selection: fixed
   flip_fraction: 0.5       # share of the attacker's attack rows relabeled
+  flip_per_family: true    # apply the 50% within every attack family
   target_label: Benign
+  min_attack_families: 2   # attacker must hold >= 2 attack families ...
+  min_rows_per_family: 100 # ... with >= 100 rows each, or the run stops
+  allow_weak_attacker: false
 
-seeds: [42, 43, 44]        # one run per seed; report mean and std
+# One run per seed. A seed changes model init, minibatch order / dropout and
+# which attack rows are poisoned; never the subset, splits or partition.
+# Conditions with the same seed are paired (identical initial weights).
+seeds: [42, 43, 44]

@@ -1,6 +1,5 @@
-# Condition 2b: clean FedAvg on the non-IID (k-means) split.
+# Condition 2b: clean FedAvg on the non-IID split. The non-IID method
+# (dirichlet by default) comes from partition.method in default.yaml.
 experiment: fedavg_noniid
-partition:
-  method: kmeans
 federated:
   aggregation: fedavg
