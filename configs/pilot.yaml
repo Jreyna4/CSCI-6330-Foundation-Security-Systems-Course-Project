@@ -1,0 +1,17 @@
+# Small end-to-end pilot (instructor feedback): a few CSV files, a smaller
+# subset and short training, written to separate folders so it never mixes
+# with the real runs. Stack it in front of any experiment file:
+#   python src/prepare_data.py   --config configs/pilot.yaml
+#   python src/run_federated.py  --config configs/pilot.yaml configs/fedavg_noniid.yaml
+#   python src/summarize_results.py --config configs/pilot.yaml
+paths:
+  processed_dir: data/processed_pilot
+  results_dir: results_pilot
+data:
+  max_files: 12
+  max_per_class: 3000
+train:
+  epochs: 5
+federated:
+  rounds: 5
+seeds: [42]
