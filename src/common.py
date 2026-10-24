@@ -196,14 +196,31 @@ LABEL_TO_FAMILY = {
     # Brute force (1)
     "DictionaryBruteForce": "BruteForce",
 }
-_LOOKUP = {k.lower(): v for k, v in LABEL_TO_FAMILY.items()}
+def _norm(label):
+    """Lower-case and drop everything but letters and digits, so that
+    'BenignTraffic', 'BENIGN_TRAFFIC' and 'DDOS-ICMP_FLOOD' all match."""
+    return "".join(ch for ch in str(label).lower() if ch.isalnum())
+
+
+_LOOKUP = {_norm(k): v for k, v in LABEL_TO_FAMILY.items()}
+# Spellings used by other releases of the CSVs (e.g. the MERGED_CSV files).
+_LOOKUP.update({"benign": "Benign"})
+# Any other label with one of these prefixes belongs to that family.
+_PREFIX_FAMILIES = [("ddos", "DDoS"), ("dos", "DoS"), ("recon", "Recon"), ("mirai", "Mirai")]
 
 
 def to_family(label):
-    """Map one original CICIoT2023 label to its family name (case-insensitive)."""
-    key = str(label).strip().lower()
+    """Map one original CICIoT2023 label to its family name.
+
+    Matching ignores case and punctuation; unknown DDoS-/DoS-/Recon-/Mirai-
+    variants fall back to their prefix family.
+    """
+    key = _norm(label)
     if key in _LOOKUP:
         return _LOOKUP[key]
+    for prefix, family in _PREFIX_FAMILIES:
+        if key.startswith(prefix):
+            return family
     raise ValueError(f"Unknown CICIoT2023 label: {label!r}")
 
 
