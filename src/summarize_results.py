@@ -7,6 +7,10 @@ Writes (into the results directory):
                             (same seed = same initial weights and poisoned records)
   per_client.csv            each client's held-out macro F1 / FNR per run
   per_class.csv             per-family precision / recall / FNR / FPR with support
+  hypothesis_check.csv      H1/H2 per seed, plus the split of the recovery into
+                            "dropping size weighting" and "trimming" when the
+                            unweighted-mean control was run
+(Per-family and per-client paired error analysis: src/error_analysis.py.)
   convergence_val_f1.png    validation macro F1 per round: each seed (thin) + mean
 
 With 3 seeds, report the individual runs next to mean and std; three
@@ -39,8 +43,10 @@ COLORS = {
     "fedavg_noniid_poisoned": "#1baf7a",
     "trimmed_noniid": "#eda100",
     "trimmed_noniid_poisoned": "#e87ba4",
+    "mean_noniid": "#6250d6",
+    "mean_noniid_poisoned": "#3a9fb0",
 }
-EXTRA_COLORS = ["#008300", "#6250d6", "#e34948", "#7a5c2e", "#3a9fb0", "#b04e9c"]
+EXTRA_COLORS = ["#008300", "#e34948", "#7a5c2e", "#b04e9c"]
 TEXT, MUTED, GRID, SURFACE = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
 
 # (baseline, treatment, name). Deltas are treatment - baseline, paired by seed.
@@ -50,6 +56,13 @@ PAIRS = [
     ("fedavg_noniid_poisoned", "trimmed_noniid_poisoned", "defense_gain_under_attack"),
     ("fedavg_noniid", "trimmed_noniid", "defense_cost_clean"),
     ("fedavg_iid", "fedavg_noniid", "heterogeneity_cost"),
+    # Unweighted-mean control (Milestone 1 feedback): FedAvg is size-weighted,
+    # trimmed mean is not, so split the defense effect into its two parts.
+    ("mean_noniid", "mean_noniid_poisoned", "attack_cost_mean"),
+    ("fedavg_noniid", "mean_noniid", "weighting_effect_clean"),
+    ("mean_noniid", "trimmed_noniid", "trimming_effect_clean"),
+    ("fedavg_noniid_poisoned", "mean_noniid_poisoned", "unweighting_gain_under_attack"),
+    ("mean_noniid_poisoned", "trimmed_noniid_poisoned", "trimming_gain_under_attack"),
 ]
 METRICS = ("macro_f1", "binary_fpr", "binary_fnr", "accuracy", "macro_pr_auc")
 
@@ -122,9 +135,15 @@ def hypothesis_check(df, split):
     loss = 100 * (t["fedavg_noniid"] - t["fedavg_noniid_poisoned"])
     recovered = 100 * (t["trimmed_noniid_poisoned"] - t["fedavg_noniid_poisoned"])
     frac = recovered / loss.where(loss != 0)
-    return pd.DataFrame({"attack_loss_points": loss, "recovered_points": recovered,
-                         "recovered_fraction": frac,
-                         "loss_gt_3": loss > 3, "recovers_half": frac >= 0.5})
+    out = pd.DataFrame({"attack_loss_points": loss, "recovered_points": recovered,
+                        "recovered_fraction": frac,
+                        "loss_gt_3": loss > 3, "recovers_half": frac >= 0.5})
+    # Decomposition with the unweighted-mean control, when it was run:
+    # recovered = (mean - fedavg) [dropping size weighting] + (trimmed - mean) [trimming].
+    if "mean_noniid_poisoned" in t:
+        out["from_unweighting_points"] = 100 * (t["mean_noniid_poisoned"] - t["fedavg_noniid_poisoned"])
+        out["from_trimming_points"] = 100 * (t["trimmed_noniid_poisoned"] - t["mean_noniid_poisoned"])
+    return out
 
 
 def per_client_table(runs, key):

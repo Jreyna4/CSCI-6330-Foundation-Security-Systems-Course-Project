@@ -1,0 +1,10 @@
+# Control under attack: UNWEIGHTED mean with the same label-flipping
+# client(s). mean_noniid_poisoned -> trimmed_noniid_poisoned is the effect of
+# trimming alone; fedavg_noniid_poisoned -> mean_noniid_poisoned is the effect
+# of dropping size weighting (the attacker is the largest client, so FedAvg
+# gives it the most weight).
+experiment: mean_noniid_poisoned
+federated:
+  aggregation: mean
+attack:
+  enabled: true

@@ -135,7 +135,7 @@ def test_grouped_split_keeps_files_apart():
     rng = np.random.default_rng(0)
     y = rng.integers(0, 4, 3000)
     groups = np.repeat(np.arange(30), 100)
-    tr, va, te, grouped = split_indices(y, groups, 0.2, 0.1, 42, True)
+    tr, va, te, grouped, _ = split_indices(y, groups, 0.2, 0.1, 42, True)
     assert grouped
     assert len(set(tr) | set(va) | set(te)) == 3000
     g = [set(groups[i]) for i in (tr, va, te)]
@@ -225,3 +225,62 @@ def test_aggregate_dispatch():
     np.testing.assert_allclose(out[0], 2.5)
     with pytest.raises(ValueError):
         aggregate(updates, {"aggregation": "nope"})
+
+
+def test_unweighted_mean_ignores_client_size():
+    import run_federated
+    a = [np.array([0.0, 0.0])]
+    b = [np.array([10.0, 2.0])]
+    out = run_federated.unweighted_mean([(a, 1), (b, 99)])
+    assert np.allclose(out[0], [5.0, 1.0])
+    fed = run_federated.fedavg([(a, 1), (b, 99)])
+    assert np.allclose(fed[0], [9.9, 1.98])
+    assert np.allclose(run_federated.aggregate([(a, 1), (b, 99)], {"aggregation": "mean"})[0], [5.0, 1.0])
+
+
+def test_pr_auc_excludes_zero_support_classes():
+    from common import FAMILIES, compute_metrics
+    y = np.array([0, 0, 1, 1])
+    proba = np.full((4, len(FAMILIES)), 0.01)
+    proba[[0, 1], 0] = 0.9
+    proba[[2, 3], 1] = 0.9
+    m = compute_metrics(y, proba)
+    assert m["pr_auc_classes"] == ["Benign", "DDoS"]
+    assert m["pr_auc_excluded"]["Mirai"] == "no support"
+    assert m["macro_pr_auc"] == 1.0
+    assert m["f1_classes"] == ["Benign", "DDoS"]
+    # One class only: no negatives, so PR-AUC is undefined and excluded.
+    m1 = compute_metrics(np.array([1, 1]), proba[2:])
+    assert m1["pr_auc_excluded"]["DDoS"] == "no negatives" and m1["macro_pr_auc"] is None
+
+
+def test_feature_schema_maps_merged_release():
+    from common import OFFICIAL_ABSENT_IN_MERGED, feature_schema
+    merged = ["Header_Length", "Protocol Type", "Time_To_Live", "Rate", "fin_flag_number",
+              "syn_flag_number", "rst_flag_number", "psh_flag_number", "ack_flag_number",
+              "ece_flag_number", "cwr_flag_number", "ack_count", "syn_count", "fin_count",
+              "rst_count", "HTTP", "HTTPS", "DNS", "Telnet", "SMTP", "SSH", "IRC", "TCP", "UDP",
+              "DHCP", "ARP", "ICMP", "IGMP", "IPv", "LLC", "Tot sum", "Min", "Max", "AVG", "Std",
+              "Tot size", "IAT", "Number", "Variance"]
+    assert len(merged) == 39
+    fs = feature_schema(merged, merged, [])
+    counts = fs["status"].value_counts().to_dict()
+    assert counts == {"kept": 37, "absent in release": 8, "kept (renamed)": 1,
+                      "release-only (kept)": 1}
+    absent = set(fs.loc[fs.status == "absent in release", "official_name"])
+    assert absent == set(OFFICIAL_ABSENT_IN_MERGED)
+    assert fs.loc[fs.official_name == "Duration", "release_name"].item() == "Time_To_Live"
+    assert fs["model_input"].sum() == 39
+
+
+def test_group_split_search_hits_targets():
+    import prepare_data
+    rng = np.random.default_rng(0)
+    groups = np.repeat([f"f{i:02d}" for i in range(40)], 100)
+    y = rng.integers(0, 8, size=len(groups))
+    tr, va, te, info = prepare_data.search_group_split(y, groups, 0.2, 0.1, 42, 500)
+    assert len(tr) + len(va) + len(te) == len(y)
+    assert abs(len(te) / len(y) - 0.2) <= 0.025 and abs(len(va) / len(y) - 0.1) <= 0.025
+    assert not (set(groups[tr]) & set(groups[te])) and not (set(groups[va]) & set(groups[te]))
+    tr2, va2, te2, _ = prepare_data.search_group_split(y, groups, 0.2, 0.1, 42, 500)
+    assert (te == te2).all()  # deterministic

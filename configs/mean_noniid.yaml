@@ -1,0 +1,7 @@
+# Control (instructor feedback): UNWEIGHTED mean of the client models on the
+# clean non-IID split. FedAvg weights clients by size and trimmed mean does
+# not, so fedavg_noniid -> mean_noniid isolates the weighting and
+# mean_noniid -> trimmed_noniid isolates the trimming.
+experiment: mean_noniid
+federated:
+  aggregation: mean

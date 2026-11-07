@@ -148,6 +148,17 @@ def fedavg(updates):
     ]
 
 
+def unweighted_mean(updates):
+    """Plain mean of the client models, ignoring client size.
+
+    Control condition (instructor feedback): FedAvg weights clients by size,
+    trimmed mean does not. Comparing FedAvg -> mean isolates the weighting;
+    mean -> trimmed mean isolates the trimming.
+    """
+    n = len(updates)
+    return [sum(w[i] for w, _ in updates) / n for i in range(len(updates[0][0]))]
+
+
 def trim_count(n, beta):
     """Number of values removed from EACH end per coordinate."""
     return int(np.floor(beta * n + 1e-9))
@@ -186,6 +197,8 @@ def aggregate(updates, cfg_fed):
     rule = cfg_fed["aggregation"]
     if rule == "fedavg":
         return fedavg(updates)
+    if rule == "mean":
+        return unweighted_mean(updates)
     if rule == "trimmed_mean":
         return trimmed_mean(updates, cfg_fed["trim_beta"])
     if rule == "median":
@@ -241,8 +254,10 @@ def heldout_client_metrics(model, X, y, client_ids, num_clients, device):
         m = client_ids == c
         res = compute_metrics(y[m], proba[m])
         out.append({"client": c, **{k: res.get(k) for k in
-                                    ("n", "macro_f1", "accuracy", "binary_fpr", "binary_fnr",
-                                     "binary_counts", "per_class")}})
+                                    ("n", "macro_f1", "f1_classes", "accuracy",
+                                     "binary_fpr", "binary_fnr", "binary_counts",
+                                     "macro_pr_auc", "pr_auc_classes", "pr_auc_excluded",
+                                     "per_class", "confusion_matrix")}})
     return out
 
 
@@ -322,10 +337,12 @@ def run(cfg, data, part, seed, final, device):
         },
         "aggregation": {
             "rule": fed["aggregation"],
+            "weighting": "by client size" if fed["aggregation"] == "fedavg" else "unweighted",
             **({"trim_beta": fed["trim_beta"],
                 "trimmed_per_side": trim_count(k_clients, fed["trim_beta"]),
                 "values_averaged": k_clients - 2 * trim_count(k_clients, fed["trim_beta"]),
-                "weighting": "unweighted"} if fed["aggregation"] == "trimmed_mean" else {}),
+                "stress_test": len(attackers) > trim_count(k_clients, fed["trim_beta"]),
+                } if fed["aggregation"] == "trimmed_mean" else {}),
         },
         "model_selection": "global model after the last round",
         "history": history,
@@ -352,8 +369,13 @@ def check_trim_vs_attackers(cfg, attackers):
     if fed["aggregation"] == "trimmed_mean" and cfg["attack"]["enabled"]:
         k = trim_count(cfg["partition"]["num_clients"], fed["trim_beta"])
         if len(attackers) > k:
-            print(f"NOTE: {len(attackers)} attackers > {k} values trimmed per side; "
-                  "trimmed mean is outside its usual robustness assumption.")
+            print(f"STRESS TEST: {len(attackers)} attackers > {k} values trimmed per side. "
+                  "Attacker values can survive trimming in every coordinate, so this run "
+                  "probes failure, not a setting with a robustness guarantee.")
+        else:
+            print(f"NOTE: {len(attackers)} attacker(s) <= {k} trimmed per side. Even so, "
+                  "label flipping need not make the attacker's values the extreme ones, so "
+                  "trimming is not guaranteed to remove them.")
 
 
 def main(argv=None):
