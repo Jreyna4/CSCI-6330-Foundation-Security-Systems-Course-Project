@@ -114,10 +114,19 @@ def read_raw(cfg):
         label_col = find_column(df.columns, cfg["data"]["label_col"])
         df = df.rename(columns={label_col: "label"})
         df.columns = [c.strip() for c in df.columns]
+        # Rows with an empty label (blank or truncated lines in a CSV) cannot
+        # be used; drop them here and count them per file.
+        labels = df["label"].astype("string").str.strip()
+        missing = labels.isna() | (labels == "")
+        n_missing = int(missing.sum())
+        if n_missing:
+            print(f"  {path.name}: dropped {n_missing} rows with an empty label")
+        df = df[~missing].copy()
+        df["label"] = labels[~missing].astype(str)
         raw_rows += len(df)
         raw_label_counts = raw_label_counts.add(df["label"].value_counts(), fill_value=0)
         unknown = []
-        for lab in df["label"].dropna().unique():
+        for lab in df["label"].unique():
             try:
                 to_family(lab)
             except ValueError:
@@ -130,6 +139,7 @@ def read_raw(cfg):
             read_cols = [c for c in df.columns if c not in ("label", "family")]
         fam = df["family"].value_counts().reindex(FAMILIES, fill_value=0)
         per_file.append({"file": path.name, "raw_rows": len(df),
+                         "rows_dropped_empty_label": n_missing,
                          **{f"raw_{f}": int(fam[f]) for f in FAMILIES}})
         df = cap_per_family(df, per_file_cap, seed=cfg["data"]["seed"] + i)
         df["source_file"] = path.name
@@ -323,6 +333,7 @@ def make_subset_and_splits(cfg):
                           "IPs, ports, MACs or timestamps). See feature_schema.csv."),
         },
         "rows_raw_total": int(raw_rows),
+        "rows_dropped_empty_label": int(per_file["rows_dropped_empty_label"].sum()),
         "rows_after_per_file_sampling": int(n_sampled),
         **{k: (int(v) if isinstance(v, (int, np.integer)) else v) for k, v in clean_log.items()},
         "rows_final_subset": int(len(df)),
