@@ -40,6 +40,9 @@ def make_synthetic_csvs(raw_dir, n_files=12, rows=600, seed=0):
             conflict = df.iloc[[2]].copy()
             conflict["label"] = "BenignTraffic" if df.loc[2, "label"] != "BenignTraffic" else "XSS"
             df = pd.concat([df, conflict], ignore_index=True)
+            blank = df.iloc[[3, 4]].copy()  # a truncated line and a blank label
+            blank["label"] = [np.nan, "  "]
+            df = pd.concat([df, blank], ignore_index=True)
         df.to_csv(raw_dir / f"part-{f:05d}.csv", index=False)
 
 
@@ -69,6 +72,7 @@ def test_prep_outputs(cfg):
     assert s["rows_dropped_exact_duplicates"] >= 1
     assert s["rows_dropped_inf_nan"] >= 1
     assert s["rows_dropped_conflicting_labels"] >= 2
+    assert s["rows_dropped_empty_label"] == 2
     assert s["split"]["grouped_by_source_file"]
     assert sum(s["raw_label_counts_before_sampling"].values()) == s["rows_raw_total"]
     assert (out / "label_mapping.csv").exists()
