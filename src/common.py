@@ -229,6 +229,73 @@ def label_mapping_table():
     return pd.DataFrame(rows).sort_values(["family", "label"]).reset_index(drop=True)
 
 
+# --- Feature schema: official 46 features vs. the CSV release we read ---------
+# The CICIoT2023 documentation (Neto et al., 2023) lists 46 per-window flow
+# features. The MERGED_CSV release on the CIC site ships 39: it renames
+# Duration (documented as the packet time-to-live) to Time_To_Live, adds IGMP,
+# and omits the 8 features in OFFICIAL_ABSENT_IN_MERGED. prepare_data.py
+# compares the columns it actually reads against this list and writes
+# feature_schema.csv, so the mapping is checked on every run, not assumed.
+
+OFFICIAL_FEATURES = [
+    "flow_duration", "Header_Length", "Protocol Type", "Duration", "Rate", "Srate", "Drate",
+    "fin_flag_number", "syn_flag_number", "rst_flag_number", "psh_flag_number",
+    "ack_flag_number", "ece_flag_number", "cwr_flag_number",
+    "ack_count", "syn_count", "fin_count", "urg_count", "rst_count",
+    "HTTP", "HTTPS", "DNS", "Telnet", "SMTP", "SSH", "IRC", "TCP", "UDP", "DHCP", "ARP",
+    "ICMP", "IPv", "LLC",
+    "Tot sum", "Min", "Max", "AVG", "Std", "Tot size", "IAT", "Number",
+    "Magnitue", "Radius", "Covariance", "Variance", "Weight",
+]
+assert len(OFFICIAL_FEATURES) == 46
+# official name -> name used in the MERGED_CSV release
+RELEASE_RENAMES = {"Duration": "Time_To_Live"}
+RELEASE_ONLY_FEATURES = ["IGMP"]
+OFFICIAL_ABSENT_IN_MERGED = ["flow_duration", "Srate", "Drate", "urg_count",
+                             "Magnitue", "Radius", "Covariance", "Weight"]
+
+
+def feature_schema(read_cols, used_cols, dropped_by_config, train_stats=None):
+    """One row per official feature plus any release-only column.
+
+    status: kept | kept (renamed) | absent in release | dropped by config
+            | release-only (kept) | release-only (dropped by config)
+    train_stats: optional {column: {"mean", "std", "nonzero_frac"}} on the
+    raw (untransformed) training pool.
+    """
+    read_cols, used_cols = list(read_cols), set(used_cols)
+    dropped = set(dropped_by_config)
+    rows, seen = [], set()
+    transform = "sign(x)*log1p(|x|), then standardization fit on the training pool"
+    for i, name in enumerate(OFFICIAL_FEATURES, 1):
+        release = RELEASE_RENAMES.get(name, name)
+        if release not in read_cols and name in read_cols:
+            release = name  # an older release that keeps the original name
+        seen.add(release)
+        if release in used_cols:
+            status = "kept (renamed)" if release != name else "kept"
+        elif release in dropped:
+            status = "dropped by config"
+        else:
+            status = "absent in release"
+        rows.append({"official_index": i, "official_name": name,
+                     "release_name": release if release in read_cols else "",
+                     "status": status, "model_input": release in used_cols})
+    for col in read_cols:
+        if col in seen:
+            continue
+        status = "release-only (kept)" if col in used_cols else (
+            "release-only (dropped by config)" if col in dropped else "release-only (unused)")
+        rows.append({"official_index": None, "official_name": "", "release_name": col,
+                     "status": status, "model_input": col in used_cols})
+    out = pd.DataFrame(rows)
+    out["transform"] = np.where(out["model_input"], transform, "")
+    if train_stats:
+        for key in ("mean", "std", "nonzero_frac"):
+            out[f"train_{key}"] = [train_stats.get(r, {}).get(key) for r in out["release_name"]]
+    return out
+
+
 def find_column(columns, name):
     """Case-insensitive column lookup ('label' matches 'Label')."""
     for c in columns:
@@ -432,18 +499,36 @@ def compute_metrics(y_true, proba, class_names=FAMILIES, benign_id=BENIGN_ID):
     fp_bin = int((pred_attack & ~true_attack).sum())
     fn_bin = int((~pred_attack & true_attack).sum())
 
-    pr_auc = {}
-    for c in labels[present]:
+    # Multiclass PR-AUC summary (defined here so every table uses the same rule):
+    # for each family c, one-vs-rest average precision (sklearn's step-wise
+    # area under the precision-recall curve) with c as the positive class and
+    # the softmax probability of c as the score. macro_pr_auc is the UNWEIGHTED
+    # mean over families with at least one positive AND at least one negative
+    # in the evaluated rows. A family with no positives (zero support) has no
+    # defined precision-recall curve and is EXCLUDED, never scored as 0 or 1;
+    # a family that makes up every row is excluded too. The families used and
+    # excluded are listed next to the value. Macro F1 uses the same rule
+    # (families with zero support are excluded). So on small per-client
+    # held-out sets the averages can cover different families; read them with
+    # pr_auc_classes / f1_classes.
+    pr_auc, pr_excluded = {}, {}
+    for c in labels:
+        name = class_names[c]
         pos = y_true == c
-        # PR-AUC is undefined if every row belongs to this class.
-        pr_auc[class_names[c]] = (
-            float(average_precision_score(pos, proba[:, c])) if not pos.all() else None
-        )
+        if not pos.any():
+            pr_excluded[name] = "no support"
+        elif pos.all():
+            pr_excluded[name] = "no negatives"
+        else:
+            pr_auc[name] = float(average_precision_score(pos, proba[:, c]))
 
-    pr_vals = [v for v in pr_auc.values() if v is not None]
+    pr_vals = list(pr_auc.values())
     return {
         "n": int(len(y_true)),
         "macro_f1": float(f1[present].mean()),
+        "f1_classes": [class_names[c] for c in labels[present]],
+        "pr_auc_classes": list(pr_auc),
+        "pr_auc_excluded": pr_excluded,
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "binary_fpr": fp_bin / max(n_benign, 1),
         "binary_fnr": fn_bin / max(n_attack, 1),

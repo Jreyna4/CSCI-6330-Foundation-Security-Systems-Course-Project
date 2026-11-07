@@ -18,6 +18,7 @@ data:
   test_frac: 0.20
   val_frac: 0.10
   group_split: true        # hold out whole source CSV files (no file in two splits)
+  split_search_tries: 2000 # seeded file assignments tried; closest to the target fractions wins
   drop_conflicting_duplicates: true  # drop identical feature vectors with different labels
   # Identifier / shortcut columns dropped before anything else. CICIoT2023's
   # CSVs have no IPs, ports or timestamps. Check timing-like features (e.g.
@@ -57,10 +58,12 @@ train:
 
 federated:
   rounds: 30
-  aggregation: fedavg      # fedavg | trimmed_mean | median
+  aggregation: fedavg      # fedavg (size-weighted) | mean (unweighted control) | trimmed_mean | median
   # Fraction trimmed from EACH end per coordinate: k = floor(beta * n).
   # With 10 clients, 0.2 trims 2 high + 2 low values and averages the middle
-  # 6 (unweighted). Tolerates up to 2 attackers.
+  # 6 (unweighted). With up to 2 attackers their values CAN all be trimmed,
+  # but label flipping need not make them the extreme ones, so this is not a
+  # guarantee. 3 attackers exceed the trimming budget: a stress test only.
   trim_beta: 0.2
 
 attack:

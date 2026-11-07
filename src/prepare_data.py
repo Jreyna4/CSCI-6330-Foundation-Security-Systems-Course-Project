@@ -13,19 +13,38 @@ The order of operations is fixed and documented (instructor feedback):
 4. Cap: at most `data.max_per_class` rows per family (rare families kept
    whole). The resulting prevalence is NOT the natural prevalence; both are
    written to subset_summary.json.
-5. Split: hold out test (20%) then validation (10%), stratified by family and,
-   if `data.group_split`, grouped by source file so no file contributes rows to
-   more than one split. All of this happens BEFORE any scaler or partitioner
-   is fit.
+5. Split: hold out test (20%) then validation (10%). With `data.group_split`,
+   whole source files are assigned to one split each, so the realized
+   fractions move in file-sized steps: with N files each file is about 1/N of
+   the rows. Among `data.split_search_tries` random file assignments (seeded),
+   the one closest to the target fractions and to the global family mix is
+   kept; every family must appear in every split. The file list and the
+   per-file and per-family counts of each split are written to
+   split_files.csv and subset_summary.json. All of this happens BEFORE any
+   scaler or partitioner is fit.
+   Caveat: file grouping guards against chunk-level leakage; it does not
+   prove capture/session independence. The MERGED_CSV files each contain
+   (nearly) every attack type, so one capture can contribute rows to several
+   files, and the release has no capture id, IPs or timestamps to group on.
+   A nearest-neighbour check between splits (split_diagnostics.json) shows
+   how close held-out rows are to training rows.
 6. Partition the training pool into `partition.num_clients` clients with
    every method (dirichlet, kmeans, iid). The scaler and k-means centroids are
    fit on the training pool only; held-out val/test rows are assigned to
    clients with the FROZEN scaler + centroids (k-means) or the frozen
-   per-class client proportions (Dirichlet), never refit.
+   per-class client proportions (Dirichlet), never refit. Note: the Dirichlet
+   assignment of held-out rows uses their labels. That is label-informed
+   benchmark construction (it fixes which client "owns" each held-out row, so
+   per-client evaluation matches the client's training mix), not a rule a
+   deployed system could use to identify clients. It is acceptable here
+   because labels are never model inputs and the test set is never used for
+   tuning.
 7. Report: per-client size, benign/attack balance, family distribution,
    distance from the global distribution, label purity, client-label mutual
    information, and a pass/fail check that the clients are balanced enough,
-   trainable and not label-pure.
+   trainable and not label-pure. Also written: feature_schema.csv (the
+   official 46 CICIoT2023 features vs. the columns actually read and used,
+   with the transform and training-pool statistics of each).
 8. Freeze: pipeline_manifest.json stores the config and SHA-256 hashes of
    every output, and each training run records it.
 
@@ -43,12 +62,14 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.metrics import mutual_info_score, normalized_mutual_info_score
-from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import NearestNeighbors
 
 from common import (
     FAMILIES,
     FAMILY_TO_ID,
     Preprocessor,
+    feature_schema,
     find_column,
     label_mapping_table,
     load_config,
@@ -87,7 +108,7 @@ def read_raw(cfg):
 
     raw_label_counts = pd.Series(dtype="int64")
     raw_rows = 0
-    parts = []
+    parts, per_file, read_cols = [], [], None
     for i, path in enumerate(files):
         df = pd.read_csv(path)
         label_col = find_column(df.columns, cfg["data"]["label_col"])
@@ -105,12 +126,18 @@ def read_raw(cfg):
             raise ValueError(f"{path.name}: unknown labels {sorted(map(str, unknown))}. "
                              "Add them to LABEL_TO_FAMILY in src/common.py.")
         df["family"] = df["label"].map(to_family)
+        if read_cols is None:
+            read_cols = [c for c in df.columns if c not in ("label", "family")]
+        fam = df["family"].value_counts().reindex(FAMILIES, fill_value=0)
+        per_file.append({"file": path.name, "raw_rows": len(df),
+                         **{f"raw_{f}": int(fam[f]) for f in FAMILIES}})
         df = cap_per_family(df, per_file_cap, seed=cfg["data"]["seed"] + i)
         df["source_file"] = path.name
         parts.append(df)
         print(f"[{i + 1}/{len(files)}] {path.name}: kept {len(df)} rows")
     raw_label_counts = raw_label_counts.astype("int64").sort_values(ascending=False)
-    return pd.concat(parts, ignore_index=True), files, raw_label_counts, raw_rows
+    return (pd.concat(parts, ignore_index=True), files, raw_label_counts, raw_rows,
+            pd.DataFrame(per_file), read_cols)
 
 
 # --- 3. Clean -------------------------------------------------------------------
@@ -146,12 +173,57 @@ def clean(df, cfg):
 
 # --- 5. Splits ------------------------------------------------------------------
 
-def split_indices(y, groups, test_frac, val_frac, seed, group_split):
-    """Return (train_idx, val_idx, test_idx).
+def search_group_split(y, groups, test_frac, val_frac, seed, tries):
+    """Assign whole source files to test, val or train.
 
-    With group_split, StratifiedGroupKFold holds out whole source files while
-    keeping family proportions as close as possible.
+    For each of `tries` seeded random file orders, files are added to test
+    while that moves the test share closer to test_frac, then to val the same
+    way; the rest is train. Score = |test share - target| + |val share - target|
+    + 0.25 * (largest family-share deviation from the overall mix, summed over
+    test and val). Assignments that leave any family of the subset out of a
+    split are rejected. The lowest score wins; the search is deterministic given `seed`.
     """
+    files = np.unique(groups)
+    pos = {g: i for i, g in enumerate(files)}
+    gid = np.array([pos[g] for g in groups])
+    m = np.zeros((len(files), len(FAMILIES)), dtype=np.int64)
+    np.add.at(m, (gid, y), 1)
+    file_rows = m.sum(axis=1)
+    total = m.sum()
+    overall = m.sum(axis=0) / total
+    present = m.sum(axis=0) > 0  # families that exist in the subset at all
+    rng = np.random.default_rng(seed)
+
+    best = None
+    for t in range(tries):
+        order = rng.permutation(len(files))
+        assign = np.full(len(files), 2)  # 0 = test, 1 = val, 2 = train
+        for split_id, target in ((0, test_frac), (1, val_frac)):
+            rows = 0
+            for f in order:
+                if assign[f] == 2 and abs((rows + file_rows[f]) / total - target) < abs(rows / total - target):
+                    assign[f] = split_id
+                    rows += file_rows[f]
+        sums = [m[assign == s].sum(axis=0) for s in (0, 1, 2)]
+        if any((s[present] == 0).any() for s in sums):
+            continue
+        score = abs(sums[0].sum() / total - test_frac) + abs(sums[1].sum() / total - val_frac)
+        score += 0.25 * sum(np.abs(s / s.sum() - overall).max() for s in sums[:2])
+        if best is None or score < best[0]:
+            best = (score, assign.copy(), t)
+    if best is None:
+        raise RuntimeError("No file assignment puts every family in every split; "
+                           "use more files or set data.group_split: false.")
+    score, assign, t = best
+    a = assign[gid]
+    idx = np.arange(len(y))
+    info = {"method": "seeded search over whole-file assignments (see search_group_split)",
+            "tries": int(tries), "best_try": int(t), "score": float(score)}
+    return idx[a == 2], idx[a == 1], idx[a == 0], info
+
+
+def split_indices(y, groups, test_frac, val_frac, seed, group_split, tries=2000):
+    """Return (train_idx, val_idx, test_idx, grouped, info)."""
     idx = np.arange(len(y))
     n_groups = len(np.unique(groups))
     use_groups = group_split and n_groups >= MIN_GROUPS_FOR_GROUP_SPLIT
@@ -160,24 +232,19 @@ def split_indices(y, groups, test_frac, val_frac, seed, group_split):
               f"stratified split (need >= {MIN_GROUPS_FOR_GROUP_SPLIT}).")
 
     if use_groups:
-        k_test = max(2, round(1 / test_frac))
-        sgkf = StratifiedGroupKFold(n_splits=k_test, shuffle=True, random_state=seed)
-        rest, test = next(sgkf.split(idx, y, groups))
-        k_val = max(2, round((1 - test_frac) / val_frac))
-        sgkf = StratifiedGroupKFold(n_splits=k_val, shuffle=True, random_state=seed)
-        tr, va = next(sgkf.split(rest, y[rest], groups[rest]))
-        return rest[tr], rest[va], test, True
+        tr, va, te, info = search_group_split(y, groups, test_frac, val_frac, seed, tries)
+        return tr, va, te, True, info
 
     rest, test = train_test_split(idx, test_size=test_frac, stratify=y, random_state=seed)
     tr, va = train_test_split(
         rest, test_size=val_frac / (1 - test_frac), stratify=y[rest], random_state=seed
     )
-    return tr, va, test, False
+    return tr, va, test, False, {"method": "row-level stratified split (not grouped)"}
 
 
 def make_subset_and_splits(cfg):
     seed = cfg["data"]["seed"]
-    df, files, raw_label_counts, raw_rows = read_raw(cfg)
+    df, files, raw_label_counts, raw_rows, per_file, read_cols = read_raw(cfg)
     n_sampled = len(df)
     df, feature_cols, clean_log = clean(df, cfg)
 
@@ -185,9 +252,10 @@ def make_subset_and_splits(cfg):
     df = cap_per_family(df, cap, seed).reset_index(drop=True)
     df["y"] = df["family"].map(FAMILY_TO_ID).astype("int64")
 
-    tr, va, te, grouped = split_indices(
+    tr, va, te, grouped, split_info = split_indices(
         df["y"].to_numpy(), df["source_file"].to_numpy(),
         cfg["data"]["test_frac"], cfg["data"]["val_frac"], seed, cfg["data"]["group_split"],
+        cfg["data"].get("split_search_tries", 2000),
     )
     splits = {"train_pool": df.iloc[tr], "val": df.iloc[va], "test": df.iloc[te]}
 
@@ -203,6 +271,27 @@ def make_subset_and_splits(cfg):
 
     mapping = label_mapping_table()
     mapping.to_csv(out_dir / "label_mapping.csv", index=False)
+
+    # Which file went where, with raw and subset counts per family.
+    split_of_file = {f: name for name, sp in splits.items() for f in sp["source_file"].unique()}
+    sub = (df.groupby(["source_file", "family"]).size().unstack(fill_value=0)
+           .reindex(columns=FAMILIES, fill_value=0))
+    per_file = per_file.set_index("file")
+    per_file.insert(0, "split", [split_of_file.get(f, "unused") for f in per_file.index])
+    per_file["subset_rows"] = sub.sum(axis=1).reindex(per_file.index, fill_value=0)
+    for f in FAMILIES:
+        per_file[f"subset_{f}"] = sub[f].reindex(per_file.index, fill_value=0)
+    per_file["raw_families_present"] = (per_file[[f"raw_{f}" for f in FAMILIES]] > 0).sum(axis=1)
+    per_file.sort_values(["split", "file"]).to_csv(out_dir / "split_files.csv")
+
+    # Feature schema: official 46 vs. what was read and used, with raw
+    # (untransformed) training-pool statistics of every used column.
+    tp = splits["train_pool"][feature_cols]
+    stats = {c: {"mean": float(tp[c].mean()), "std": float(tp[c].std()),
+                 "nonzero_frac": float((tp[c] != 0).mean())} for c in feature_cols}
+    schema = feature_schema(read_cols, feature_cols, clean_log["dropped_cols"], stats)
+    schema.to_csv(out_dir / "feature_schema.csv", index=False)
+    constant = [c for c in feature_cols if not stats[c]["std"] > 0]
 
     raw_family_counts = (
         raw_label_counts.rename(index=lambda s: to_family(s)).groupby(level=0).sum()
@@ -223,6 +312,16 @@ def make_subset_and_splits(cfg):
         "source_files": [p.name for p in files],
         "num_features": len(feature_cols),
         "feature_cols": feature_cols,
+        "feature_schema": {
+            "official_count": 46,
+            "read_from_release": len(read_cols),
+            "used_as_inputs": len(feature_cols),
+            "status_counts": schema["status"].value_counts().to_dict(),
+            "constant_in_training_pool": constant,
+            "selection": ("No feature selection: every numeric column of the release is used "
+                          "except data.drop_cols. None is an identifier (the release has no "
+                          "IPs, ports, MACs or timestamps). See feature_schema.csv."),
+        },
         "rows_raw_total": int(raw_rows),
         "rows_after_per_file_sampling": int(n_sampled),
         **{k: (int(v) if isinstance(v, (int, np.integer)) else v) for k, v in clean_log.items()},
@@ -232,6 +331,12 @@ def make_subset_and_splits(cfg):
             "test_frac_target": cfg["data"]["test_frac"],
             "val_frac_target": cfg["data"]["val_frac"],
             "grouped_by_source_file": grouped,
+            "assignment": split_info,
+            "why_fractions_differ": (
+                "Whole files are assigned to one split, so the realized fractions move in "
+                f"steps of about 1/{len(files)} of the rows; the closest assignment found is used."
+                if grouped else "Row-level stratified split."),
+            "files": {k: sorted(v["source_file"].unique().tolist()) for k, v in splits.items()},
             "rows": {k: int(len(v)) for k, v in splits.items()},
             "realized_frac": {k: len(v) / len(df) for k, v in splits.items()},
             "source_files_per_split": {k: int(v["source_file"].nunique()) for k, v in splits.items()},
@@ -258,6 +363,56 @@ def make_subset_and_splits(cfg):
     table.to_csv(out_dir / "family_counts.csv")
     print(table)
     print({k: v for k, v in clean_log.items()})
+    sp = summary["split"]
+    print("split: " + ", ".join(
+        f"{k} {100 * v:.1f}% ({sp['source_files_per_split'][k]} files)"
+        for k, v in sp["realized_frac"].items()))
+    print(f"features: read {len(read_cols)}, used {len(feature_cols)}; "
+          + ", ".join(f"{k}: {v}" for k, v in summary["feature_schema"]["status_counts"].items()))
+    if constant:
+        print(f"constant in the training pool (kept; they standardize to 0): {constant}")
+
+
+# --- 5b. Split diagnostics ------------------------------------------------------
+
+def _dist_summary(d):
+    return {"median": float(np.median(d)), "p10": float(np.percentile(d, 10)),
+            "p90": float(np.percentile(d, 90)),
+            "exact_duplicates": int((d < 1e-9).sum()),
+            "share_within_0.01": float((d < 0.01).mean())}
+
+
+def split_diagnostics(cfg, n_query=2000):
+    """How close are held-out rows to the training pool?
+
+    For a seeded sample of val and test rows, the distance to the nearest
+    training row (after the train-fit transform) is compared with the
+    distance between a training row and its nearest OTHER training row. If
+    the held-out distances are about as small, file grouping has not made
+    held-out rows less similar to training rows than training rows are to
+    each other, so it does not by itself show capture independence. Exact
+    cross-split duplicates should be 0 (they are removed before splitting).
+    """
+    X_tr, _, _ = load_split(cfg, "train_pool")
+    prep = Preprocessor(cfg["data"]["log_transform"]).fit(X_tr)
+    Z_tr = prep.transform(X_tr)
+    rng = np.random.default_rng(cfg["data"]["seed"])
+    nn = NearestNeighbors(n_neighbors=2).fit(Z_tr)
+    out = {"n_query_per_split": n_query,
+           "distance": "euclidean, on signed-log + standardized features (train-fit)"}
+    q = rng.choice(len(Z_tr), size=min(n_query, len(Z_tr)), replace=False)
+    d, _ = nn.kneighbors(Z_tr[q])
+    out["train_to_other_train"] = _dist_summary(d[:, 1])
+    for name in ("val", "test"):
+        X, _, _ = load_split(cfg, name)
+        Z = prep.transform(X)
+        q = rng.choice(len(Z), size=min(n_query, len(Z)), replace=False)
+        d, _ = nn.kneighbors(Z[q], n_neighbors=1)
+        out[f"{name}_to_train"] = _dist_summary(d[:, 0])
+    save_json(out, processed_dir(cfg) / "split_diagnostics.json")
+    print("median distance to nearest training row: " + ", ".join(
+        f"{k} {v['median']:.3f}" for k, v in out.items() if isinstance(v, dict)))
+    return out
 
 
 # --- 6. Partitions --------------------------------------------------------------
@@ -412,7 +567,12 @@ def make_partitions(cfg):
                 "alpha": pcfg["dirichlet_alpha"], "draw_attempts": attempts,
                 "family_client_proportions": {f: props[i].tolist() for i, f in enumerate(FAMILIES)},
                 "heldout_assignment": "frozen per-family client proportions from the train split",
-                "note": "Uses labels by design: label skew is the controlled heterogeneity variable.",
+                "note": ("Uses labels by design: label skew is the controlled heterogeneity "
+                         "variable. Held-out rows are assigned to clients using their labels: "
+                         "label-informed benchmark construction, not a client-identification "
+                         "rule. Labels are never model inputs; the test set is never used "
+                         "for tuning."),
+                "label_informed_heldout_assignment": True,
             })
         else:  # kmeans
             clients, prep, km = kmeans_fit(X, k, seed, cfg["data"]["log_transform"])
@@ -504,6 +664,7 @@ def main(argv=None):
 
     if not args.partitions_only:
         make_subset_and_splits(cfg)
+        split_diagnostics(cfg)
     make_partitions(cfg)
     write_manifest(cfg)
 

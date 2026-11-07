@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 import common
+import error_analysis
 import prepare_data
 import run_federated
 import summarize_results
@@ -56,6 +57,7 @@ def cfg(tmp_path_factory):
         "attack.min_rows_per_family=5",
     ])
     prepare_data.make_subset_and_splits(cfg)
+    prepare_data.split_diagnostics(cfg, n_query=200)
     prepare_data.make_partitions(cfg)
     prepare_data.write_manifest(cfg)
     return cfg
@@ -75,6 +77,30 @@ def test_prep_outputs(cfg):
         assert "checks_passed" in rep and len(rep["clients"]) == 5
     assert (out / "partitions" / "kmeans_k5_model.npz").exists()
     assert (out / "pipeline_manifest.json").exists()
+
+    # Grouped split: closest file assignment, every file in exactly one split,
+    # realized fractions within one file of the targets.
+    sp = s["split"]
+    files = sp["files"]
+    allf = files["train_pool"] + files["val"] + files["test"]
+    assert len(allf) == len(set(allf)) == 12
+    one_file = 1 / 12
+    assert abs(sp["realized_frac"]["test"] - 0.20) <= one_file
+    assert abs(sp["realized_frac"]["val"] - 0.10) <= one_file
+    sf = pd.read_csv(out / "split_files.csv")
+    assert set(sf["split"]) == {"train_pool", "val", "test"} and len(sf) == 12
+    assert sf["subset_rows"].sum() == s["rows_final_subset"]
+
+    # Feature schema: 46 official rows; the synthetic CSVs carry 10 of them.
+    fs = pd.read_csv(out / "feature_schema.csv")
+    assert (fs["official_index"].notna()).sum() == 46
+    assert fs["model_input"].sum() == s["num_features"] == len(FEATURES)
+    assert s["feature_schema"]["used_as_inputs"] == len(FEATURES)
+
+    d = json.loads((out / "split_diagnostics.json").read_text())
+    assert d["test_to_train"]["exact_duplicates"] == 0
+    dp = json.loads((out / "partitions" / "dirichlet_k5.json").read_text())
+    assert dp["label_informed_heldout_assignment"] is True
 
 
 def test_runs_are_paired_and_summarized(cfg):
@@ -106,8 +132,23 @@ def test_runs_are_paired_and_summarized(cfg):
     assert len(clean["per_client_val"]) == 5 and "per_client_test" in clean
     assert clean["communication"]["cumulative_per_run"] == 2 * clean["communication"]["total_per_round"]
 
+    mean_cfg = common.apply_overrides(pois_cfg, ["experiment=mean_noniid_poisoned",
+                                                 "federated.aggregation=mean"])
+    mean_p = run_federated.run(mean_cfg, data, part, 42, False, device)
+    part["attackers"] = []
+    mean_c = run_federated.run(common.apply_overrides(cfg, ["experiment=mean_noniid",
+                                                            "federated.aggregation=mean"]),
+                               data, part, 42, False, device)
+    trim_c = run_federated.run(common.apply_overrides(cfg, ["experiment=trimmed_noniid",
+                                                            "federated.aggregation=trimmed_mean"]),
+                               data, part, 42, False, device)
+    assert mean_p["aggregation"]["weighting"] == "unweighted"
+    assert clean["aggregation"]["weighting"] == "by client size"
+    assert mean_p["init_weights_sha256"] == clean["init_weights_sha256"]
+    assert "macro_pr_auc" in clean["per_client_val"][0]
+
     res = common.repo_path(cfg["paths"]["results_dir"])
-    for r in (clean, pois, trim):
+    for r in (clean, pois, trim, mean_p, mean_c, trim_c):
         common.save_json(r, res / r["experiment"] / "seed_42.json")
     cen = train_centralized.run({**cfg, "experiment": "centralized"}, data, 42, False, device)
     common.save_json(cen, res / "centralized" / "seed_42.json")
@@ -115,6 +156,16 @@ def test_runs_are_paired_and_summarized(cfg):
     summarize_results.main(["--config", str(_write_cfg(cfg, res.parent))])
     assert (res / "runs.csv").exists() and (res / "paired_deltas.csv").exists()
     assert (res / "convergence_val_f1.png").exists()
+    deltas = pd.read_csv(res / "paired_deltas.csv")
+    assert {"trimming_gain_under_attack", "unweighting_gain_under_attack"} <= set(deltas.comparison)
+
+    error_analysis.main(["--config", str(_write_cfg(cfg, res.parent))])
+    an = res / "analysis"
+    fp = pd.read_csv(an / "per_family_paired.csv")
+    assert {"attack_cost_fedavg", "attack_cost_trimmed", "attack_cost_mean"} <= set(fp.comparison)
+    cp = pd.read_csv(an / "per_client_paired.csv")
+    assert cp["client"].nunique() == 5
+    assert (an / "family_missed_as_benign.png").exists() and (an / "client_attack_cost.png").exists()
 
 
 def _write_cfg(cfg, folder):

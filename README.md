@@ -43,7 +43,13 @@ In a ten-client federated IDS trained on non-IID partitions of CICIoT2023, how m
 | 3 | FedAvg, non-IID, one label-flipping client | `configs/fedavg_noniid_poisoned.yaml` |
 | 4a | Trimmed mean, non-IID, clean | `configs/trimmed_noniid.yaml` |
 | 4b | Trimmed mean, non-IID, one label-flipping client | `configs/trimmed_noniid_poisoned.yaml` |
-| S | Conditions 3 and 4b with 2 and 3 attackers | `scripts/run_attacker_sweep.sh` |
+| 5a | **Unweighted mean**, non-IID, clean (control) | `configs/mean_noniid.yaml` |
+| 5b | **Unweighted mean**, non-IID, one label-flipping client (control) | `configs/mean_noniid_poisoned.yaml` |
+| S | Conditions 3, 5b and 4b with 2 and 3 attackers (**stress test**, run last) | `scripts/run_attacker_sweep.sh` |
+
+**Why the unweighted-mean control (Milestone 1 feedback).** FedAvg weights each client by its size; trimmed mean does not. Comparing them directly mixes two changes. With condition 5: FedAvg → unweighted mean isolates the **weighting**, and unweighted mean → trimmed mean isolates the **trimming**. This matters here because the attacker is the largest client, so FedAvg gives it the most weight. `summarize_results.py` reports both parts (`unweighting_gain_under_attack`, `trimming_gain_under_attack`) and splits the H2 recovery accordingly.
+
+**Attacker sweep is a stress test.** With `trim_beta = 0.2` and 10 clients, 2 values are trimmed per side. With 3 attackers, attacker values can survive trimming in every coordinate, so m = 3 shows how the defense fails rather than a setting with a robustness guarantee. Even m ≤ 2 is not guaranteed: label flipping need not make the attackers' parameter values the extreme ones that get trimmed. Per the feedback, the complete paired comparison and the error analysis come first; the sweep runs after.
 
 Everything not named in a condition is identical across conditions: selected records, partitions, initial weights (per seed), participating clients, local epochs, optimizer, learning rate, batch size, rounds, preprocessing and test data.
 
@@ -125,10 +131,24 @@ Follows the seven attack categories of the CICIoT2023 paper (Neto et al., 2023).
 2. **Sample per file:** at most `ceil(2 × max_per_class / n_files)` rows per family from each file (seed 42 + file index), so the subset covers all capture files.
 3. **Clean:** drop `data.drop_cols`, rows with inf/NaN, **exact duplicate (feature + label) rows**, and feature vectors that appear with **conflicting labels**. Every count is logged.
 4. **Cap:** at most `max_per_class` = 45,000 rows per family (seed 42); rarer families are kept whole. **The subset prevalence is therefore a design choice, not the natural prevalence.** Both are reported (`family_counts.csv`, `subset_summary.json`).
-5. **Split:** test 20%, then validation 10%, stratified by family and **grouped by source CSV file** (no file contributes rows to two splits). CICIoT2023's CSVs have no device or session column, so the source file is the only capture grouping available.
+5. **Split:** test 20%, then validation 10%, **grouped by source CSV file** (no file contributes rows to two splits). Because whole files move together, the realized fractions change in steps of about 1/N of the rows (N = number of files). In the Milestone 1 pilot, 12 files meant steps of 8.3%: two test files gave 17.0% and one validation file 8.5%, the closest possible to 20% / 10%, leaving 74.4% for training. `prepare_data.py` now searches 2,000 seeded file assignments and keeps the one closest to the targets and to the overall family mix, with every family in every split; with all 63 files the steps are about 1.6%. **`split_files.csv` lists every file, its split and its raw and subset rows per family**, and `subset_summary.json` lists the files and per-family supports of each split.
+   *Limitation:* holding files apart does **not** guarantee capture/session independence. Each MERGED_CSV file contains (nearly) every attack type (`raw_families_present` in `split_files.csv`), so one capture can contribute rows to several files, and the release has no capture id, IPs or timestamps to group on. Exact duplicates are removed before splitting; `split_diagnostics.json` compares each held-out row's distance to the nearest training row with the distance between training rows, which shows how much separation file grouping actually gives.
 6. **Partition** the 70% training pool into 10 clients. The scaler and k-means are fit on training rows only.
-7. **Assign held-out rows to clients** with the **frozen** partitioner: nearest train-fit centroid for k-means, the train-time per-family client proportions for Dirichlet. Nothing is refit on held-out data.
+7. **Assign held-out rows to clients** with the **frozen** partitioner: nearest train-fit centroid for k-means, the train-time per-family client proportions for Dirichlet. Nothing is refit on held-out data. **The Dirichlet assignment uses each held-out row's label.** That is *label-informed benchmark construction*: it decides which simulated client "owns" a held-out row so per-client evaluation matches that client's training mix. It is not a rule a deployed system could use to identify clients. It is acceptable for this simulation because labels are never model inputs and the test set is never used for tuning.
 8. **Freeze:** `pipeline_manifest.json` stores the config, package versions and SHA-256 of every output; each run records these hashes.
+
+### Features: official 46 → the 39 we use
+
+The CICIoT2023 documentation lists **46** features. The **MERGED_CSV** release we downloaded from the CIC site has **39**. `prepare_data.py` writes `feature_schema.csv` on every run (each official feature, its name in the release, whether it is a model input, the transform, and its training-pool mean, standard deviation and non-zero share), so this mapping is checked, not assumed:
+
+| Change from the official list | Features |
+|---|---|
+| Kept, same name (37) | Header_Length, Protocol Type, Rate, the 7 flag numbers (fin, syn, rst, psh, ack, ece, cwr), ack_count, syn_count, fin_count, rst_count, HTTP, HTTPS, DNS, Telnet, SMTP, SSH, IRC, TCP, UDP, DHCP, ARP, ICMP, IPv, LLC, Tot sum, Min, Max, AVG, Std, Tot size, IAT, Number, Variance |
+| Kept, renamed (1) | Duration (documented as time-to-live) → `Time_To_Live` |
+| Added by the release (1) | `IGMP` |
+| Not in the release (8) | flow_duration, Srate, Drate, urg_count, Magnitue, Radius, Covariance, Weight |
+
+**Selection and justification.** We do no feature selection: all 39 numeric columns of the release are model inputs (minus anything listed in `data.drop_cols`, empty by default). Reasons: (1) none is an identifier, since the release has no IPs, ports, MACs or timestamps; (2) the 8 missing features are not in the files, so they cannot be used; (3) choosing features on our own data would add a tuning step that could leak information and would differ between centralized and federated runs. Every feature gets the same transform: `sign(x)·log1p(|x|)` (the features are heavy-tailed counts and rates), then standardization with mean and standard deviation fit on the training pool only. Features that are constant in the training pool are listed in `subset_summary.json` and standardize to 0. `IAT` is a known possible shortcut in CICIoT2023; a sensitivity check that drops it (`--set data.drop_cols='[IAT]'`, with separate `paths`) is planned.
 
 ### Client partitions and checks
 
@@ -193,10 +213,15 @@ python src/run_federated.py --config configs/fedavg_noniid.yaml
 python src/run_federated.py --config configs/fedavg_noniid_poisoned.yaml
 python src/run_federated.py --config configs/trimmed_noniid.yaml
 python src/run_federated.py --config configs/trimmed_noniid_poisoned.yaml
-bash scripts/run_attacker_sweep.sh          # 2 and 3 attackers
+python src/run_federated.py --config configs/mean_noniid.yaml            # control
+python src/run_federated.py --config configs/mean_noniid_poisoned.yaml   # control
 
-# 4. Tables and convergence plot
+# 4. Tables, convergence plot, per-family and per-client error analysis
 python src/summarize_results.py
+python src/error_analysis.py
+
+# 5. Later: attacker sweep (stress test), after the paired comparison
+bash scripts/run_attacker_sweep.sh          # 2 and 3 attackers
 ```
 
 Steps 1-4 are also `bash scripts/run_all.sh`. On Windows without bash, run the Python commands above.
@@ -208,18 +233,24 @@ Scripts report **validation** metrics only. Add `--final` (or `FINAL=1 bash scri
 ## Evaluation
 
 - **Global:** macro F1 on the pooled test set (primary); per-family precision, recall, FNR, one-vs-rest FPR, F1 and PR-AUC, **each with its support and number of negatives**; benign-vs-attack FPR/FNR with counts; confusion matrix; per-round validation curves.
+- **Definitions.** *Macro F1* is the unweighted mean of per-family F1 over the families with at least one true row in the evaluated set. *Per-family PR-AUC* is one-vs-rest average precision (scikit-learn's step-wise area under the precision-recall curve), with that family as the positive class and its softmax probability as the score. *Macro PR-AUC* is the unweighted mean of per-family PR-AUC over families with at least one positive **and** at least one negative row. **A family with no support is excluded, never scored as 0 or 1**; a family that is every row is excluded too. Every result lists the families used (`f1_classes`, `pr_auc_classes`) and the excluded ones with the reason (`pr_auc_excluded`), since small per-client held-out sets can lack some families.
 - **Client-level:** the global model evaluated on each client's held-out records (assigned by the frozen partitioner), with per-family support, plus the minimum and spread across clients. A pooled test set can hide failures on minority clients or families, so both are reported.
 - **Communication proxy:** raw float32 model bytes. Per participating client per round, one download (global model) plus one upload (full local model). Also reported per round for all clients and cumulatively per run. Downloads are included; compression and protocol overhead are not.
 - **Runtime:** single-machine simulation time, stored with a hardware description (CPU, cores, RAM, GPU if any, torch version and threads) and peak resident memory.
 
 Output tables in `results/`: `runs.csv`, `summary.csv`, `paired_deltas.csv`, `hypothesis_check.csv`, `per_client.csv`, `per_class.csv`, `convergence_val_f1.png`.
 
+**Error analysis** (`src/error_analysis.py`, Milestone 2 priority), in `results/analysis/`: `per_family.csv` and `per_family_paired.csv` (per family: recall, F1 and the share of rows predicted **Benign**, the attacker's target, with paired deltas over seeds), `per_client.csv` and `per_client_paired.csv` (each client's held-out macro F1 and FNR with its training mix and attacker flag, with paired deltas), and two black-and-white figures: `family_missed_as_benign.png` and `client_attack_cost.png`.
+
+Data-prep outputs in `data/processed/`: `subset_summary.json`, `family_counts.csv`, `split_files.csv`, `feature_schema.csv`, `split_diagnostics.json`, `label_mapping.csv`, `partitions/`, `pipeline_manifest.json`.
+
 ## Open decisions (TODO)
 
 - Run the pilot, then check the Dirichlet and k-means checks on the real data. If Dirichlet fails, adjust `partition.dirichlet_alpha`.
 - Check the family counts in `data/processed/family_counts.csv` (settles `max_per_class`).
-- Check timing-like features (for example `IAT`) for shortcut behavior; list anything dropped in `data.drop_cols` and in the report.
+- Sensitivity check without `IAT` (possible shortcut feature); report it next to the main runs.
 - Confirm which client was chosen as attacker and quote its family counts in the Milestone 2 report.
+- Report `split_files.csv`, `feature_schema.csv` and `split_diagnostics.json` in the Milestone 2 report (Milestone 1 feedback).
 
 ## Milestones
 
