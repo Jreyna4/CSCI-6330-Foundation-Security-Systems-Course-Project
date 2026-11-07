@@ -3,7 +3,7 @@
 A simulated multi-site study on CICIoT2023.
 Course project for **CSCI 6330: Foundations of Intelligent Security Systems** (Fall 2026), The University of Texas Rio Grande Valley.
 
-> **Status:** Pipeline revised to address the proposal feedback (see [`reports/feedback_response.md`](reports/feedback_response.md)). Tested end-to-end on synthetic data; no results on CICIoT2023 yet.
+> **Status:** Pipeline revised to address the proposal feedback (see [`reports/feedback_response.md`](reports/feedback_response.md)). Milestone 1 submitted (Oct 25): report in [`reports/milestone1_report.pdf`](reports/milestone1_report.pdf), slides in [`reports/milestone1_slides.pdf`](reports/milestone1_slides.pdf). A pilot on 12 of 63 CICIoT2023 files (5 rounds, seed 42) ran end to end; the full runs are next (Milestone 2).
 
 ## Team
 
@@ -78,7 +78,7 @@ Extensions if time allows: local-only models, median aggregation (`federated.agg
 
 ## Setup
 
-Requires Python 3.11, 3.12 or 3.13.
+Requires Python 3.11 to 3.14 (the pilot ran on 3.14).
 
 ```bash
 git clone https://github.com/Jreyna4/CSCI-6330-Foundation-Security-Systems-Course-Project.git
@@ -146,7 +146,7 @@ For each partition it reports and saves, per client: size and share, benign/atta
 
 | Setting | Value |
 |---|---|
-| Input | 46 numeric flow features (exact list in `subset_summary.json`), `sign(x)·log1p(|x|)` then standardization fit on the training pool |
+| Input | 39 numeric flow features (MERGED_CSV release) (exact list in `subset_summary.json`), `sign(x)·log1p(|x|)` then standardization fit on the training pool |
 | MLP | in -> 128 -> 64 -> 8; ReLU after each hidden layer; dropout 0.1 after each hidden layer; output = 8 logits |
 | Loss | Cross-entropy, no class weights |
 | Optimizer | Adam, lr 0.001, betas (0.9, 0.999), weight decay 0 |
