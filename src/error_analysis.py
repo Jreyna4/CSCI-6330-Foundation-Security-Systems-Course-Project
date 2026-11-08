@@ -17,6 +17,10 @@ Writes into <results_dir>/analysis/:
                            size, macro F1, binary FNR/FPR, macro PR-AUC, the
                            client's training mix and whether it is an attacker
   per_client_paired.csv    per comparison and client: paired deltas
+  update_diagnostics.csv   per (experiment, seed, client), averaged over rounds:
+                           share of coordinates in the trimmed tails, distance
+                           to the median update, cosine to the other clients,
+                           Krum rank; shows whether the attacker looks unusual
   family_missed_as_benign.png   attack families x key conditions (black/white)
   client_attack_cost.png        per-client paired macro-F1 cost of the attack
 
@@ -37,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 from common import BENIGN_ID, FAMILIES, load_config, processed_dir, repo_path
-from summarize_results import load_runs
+from summarize_results import clean_baseline, load_runs
 
 ATTACK_FAMILIES = [f for f in FAMILIES if f != "Benign"]
 
@@ -129,7 +133,7 @@ def per_client_table(runs, split, mix):
 def paired(df, keys, metrics, scale=100.0):
     """Paired deltas (treatment - baseline) per seed, summarized over seeds."""
     out = []
-    for base, treat, name in PAIRS:
+    for base, treat, name in all_pairs(set(df.experiment)):
         a = df[df.experiment == base].set_index(["seed", *keys])
         b = df[df.experiment == treat].set_index(["seed", *keys])
         common = a.index.intersection(b.index)
@@ -148,6 +152,36 @@ def paired(df, keys, metrics, scale=100.0):
             ]
             out.append(summ)
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+def all_pairs(names):
+    """Fixed PAIRS plus one 'attack_cost:<exp>' pair for every attacked run."""
+    pairs = [p for p in PAIRS if p[0] in names and p[1] in names]
+    have = {p[1] for p in pairs if p[2].startswith("attack_cost")}
+    for exp in sorted(names):
+        base = clean_baseline(exp, names)
+        if base and exp not in have:
+            pairs.append((base, exp, f"attack_cost:{exp}"))
+    return pairs
+
+
+def diagnostics_table(runs):
+    """Per (experiment, seed, client): update diagnostics averaged over rounds."""
+    rows = []
+    for exp, seeds in runs.items():
+        for s in seeds:
+            hist = [h for h in s.get("history", []) if "client_diagnostics" in h]
+            if not hist:
+                continue
+            attackers = set(s.get("attack", {}).get("attackers", []))
+            n = len(hist[0]["client_diagnostics"]["trimmed_share"])
+            for c in range(n):
+                vals = {k: float(np.mean([h["client_diagnostics"][k][c] for h in hist]))
+                        for k in ("trimmed_share", "dist_to_median", "cos_to_others",
+                                  "krum_rank", "update_norm")}
+                rows.append({"experiment": exp, "seed": s["seed"], "client": c,
+                             "attacker": c in attackers, **vals})
+    return pd.DataFrame(rows)
 
 
 def bw_axes(ax):
@@ -252,6 +286,20 @@ def main(argv=None):
         print("\n== Per-client change in held-out macro F1 (points, paired) ==")
         print(show.pivot_table(index="client", columns="comparison", values="mean")
               .to_string(float_format="%.1f"))
+
+    dg = diagnostics_table(runs)
+    if not dg.empty:
+        dg.to_csv(out / "update_diagnostics.csv", index=False)
+        att = dg[dg.experiment.str.contains("_poisoned")]
+        if not att.empty:
+            g = (att.groupby(["experiment", "attacker"])[["trimmed_share", "dist_to_median",
+                                                          "cos_to_others", "krum_rank"]]
+                 .mean().unstack("attacker"))
+            g.columns = [f"{m}_{'attacker' if a else 'honest'}" for m, a in g.columns]
+            print("\n== Does the attacker's update look unusual? (mean over rounds, seeds, clients) ==")
+            print("trimmed_share: share of coordinates in the trimmed tails (0.40 if random);"
+                  " krum_rank: 0 = most typical")
+            print(g.to_string(float_format="%.3f"))
 
     plot_family(fam, out / "family_missed_as_benign.png")
     if not cp.empty:

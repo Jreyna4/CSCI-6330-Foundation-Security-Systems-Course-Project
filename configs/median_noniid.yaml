@@ -1,0 +1,4 @@
+# Clean non-IID run with median aggregation (comparison defense).
+experiment: median_noniid
+federated:
+  aggregation: median

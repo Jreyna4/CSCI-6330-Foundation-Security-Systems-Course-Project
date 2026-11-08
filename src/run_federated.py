@@ -107,17 +107,51 @@ def attack_profile(y, num_clients, client_ids, target_id=BENIGN_ID):
     return prof
 
 
-def select_attackers(atk, y, client_ids, num_clients):
-    """Deterministic attacker choice; does not depend on the run seed."""
+def eligible_attackers(atk, prof):
+    """Clients that hold enough attack families for a meaningful flip."""
+    return [p["client"] for p in prof
+            if int((p["family_counts"] >= atk["min_rows_per_family"]).sum())
+            >= atk["min_attack_families"]]
+
+
+def select_attackers(atk, y, client_ids, num_clients, data_seed=42):
+    """Deterministic attacker choice; does not depend on the run seed.
+
+    selection:
+      most_attack_rows  clients with the most attack rows (default; in our
+                        Dirichlet split these are also the largest clients)
+      median_size       eligible clients whose size is closest to the median
+                        client size: a typical-sized attacker
+      random            a seeded random draw among eligible clients, fixed by
+                        (data seed, attack.random_draw), so the same clients are
+                        attackers in every condition and run seed
+      fixed             attack.attacker_clients
+    Separating attacker size from poisoning was a predicted Milestone 2
+    feedback point: with most_attack_rows the attacker is also the largest
+    client, which FedAvg weights most.
+    """
     target = FAMILY_TO_ID[atk["target_label"]]
     prof = attack_profile(y, num_clients, client_ids, target)
-    if atk["selection"] == "fixed":
+    m = atk["num_attackers"]
+    sel = atk["selection"]
+    if sel == "fixed":
         chosen = list(atk["attacker_clients"])
-    elif atk["selection"] == "most_attack_rows":
+    elif sel == "most_attack_rows":
         order = sorted(prof, key=lambda p: (-p["attack_rows"], p["client"]))
-        chosen = [p["client"] for p in order[: atk["num_attackers"]]]
+        chosen = [p["client"] for p in order[:m]]
+    elif sel in ("median_size", "random"):
+        pool = eligible_attackers(atk, prof)
+        if len(pool) < m:
+            raise ValueError(f"only {len(pool)} eligible attacker clients, need {m}")
+        if sel == "median_size":
+            sizes = np.bincount(client_ids, minlength=num_clients)
+            med = float(np.median(sizes))
+            chosen = sorted(pool, key=lambda c: (abs(sizes[c] - med), c))[:m]
+        else:
+            rng = np.random.default_rng([data_seed, 104729, int(atk.get("random_draw", 0))])
+            chosen = rng.choice(sorted(pool), size=m, replace=False).tolist()
     else:
-        raise ValueError(f"Unknown attack.selection: {atk['selection']}")
+        raise ValueError(f"Unknown attack.selection: {sel}")
     if any(c >= num_clients or c < 0 for c in chosen):
         raise ValueError(f"attacker ids {chosen} must be in [0, {num_clients})")
 
@@ -193,6 +227,35 @@ def median(updates):
     ]
 
 
+def _flat(weights):
+    return np.concatenate([np.asarray(w, dtype=np.float64).ravel() for w in weights])
+
+
+def krum_scores(updates, f):
+    """Krum score of each client (Blanchard et al., 2017).
+
+    Every client starts the round from the same global model, so distances
+    between client models equal distances between their updates. Score_i =
+    sum of squared distances to its n - f - 2 nearest other clients; a low
+    score means the update sits among the others.
+    """
+    n = len(updates)
+    if n - f - 2 < 1:
+        raise ValueError(f"Krum needs n - f - 2 >= 1 (n={n}, f={f})")
+    V = np.stack([_flat(w) for w, _ in updates])
+    sq = (V * V).sum(axis=1)
+    D = np.maximum(sq[:, None] + sq[None, :] - 2 * V @ V.T, 0.0)
+    np.fill_diagonal(D, np.inf)
+    return np.sort(D, axis=1)[:, : n - f - 2].sum(axis=1)
+
+
+def multi_krum(updates, f, m):
+    """Unweighted mean of the m clients with the lowest Krum scores (m=1: Krum)."""
+    keep = np.argsort(krum_scores(updates, f), kind="stable")[:m]
+    kept = [updates[i] for i in keep]
+    return unweighted_mean(kept), sorted(int(i) for i in keep)
+
+
 def aggregate(updates, cfg_fed):
     rule = cfg_fed["aggregation"]
     if rule == "fedavg":
@@ -203,7 +266,46 @@ def aggregate(updates, cfg_fed):
         return trimmed_mean(updates, cfg_fed["trim_beta"])
     if rule == "median":
         return median(updates)
+    if rule in ("krum", "multi_krum"):
+        n, f = len(updates), int(cfg_fed.get("krum_f", 2))
+        m = 1 if rule == "krum" else int(cfg_fed.get("multi_krum_m") or n - f)
+        return multi_krum(updates, f, m)[0]
     raise ValueError(f"Unknown aggregation rule: {rule}")
+
+
+def client_diagnostics(updates, global_weights, trim_k, krum_f):
+    """Per-client numbers that show whether an update looks unusual.
+
+    trimmed_share  share of the client's coordinates that fall in the k lowest
+                   or k highest of the n values, i.e. that coordinate-wise
+                   trimming would remove (2k/n = 0.4 for n=10, k=2 if values
+                   were in random order)
+    dist_to_median L2 distance of the client's update to the coordinate-wise
+                   median update
+    cos_to_others  cosine similarity of the client's update to the mean update
+                   of the other clients
+    krum_rank      rank of the client's Krum score (0 = most typical)
+    Computed every round for every rule, so the same diagnostic is available
+    for FedAvg and the robust rules alike.
+    """
+    g = _flat(global_weights)
+    U = np.stack([_flat(w) - g for w, _ in updates])
+    n = len(U)
+    ranks = np.argsort(np.argsort(U, axis=0, kind="stable"), axis=0, kind="stable")
+    trimmed = ((ranks < trim_k) | (ranks >= n - trim_k)).mean(axis=1) if trim_k else np.zeros(n)
+    med = np.median(U, axis=0)
+    dist = np.linalg.norm(U - med, axis=1)
+    total = U.sum(axis=0)
+    cos = []
+    for i in range(n):
+        others = (total - U[i]) / (n - 1)
+        den = np.linalg.norm(U[i]) * np.linalg.norm(others)
+        cos.append(float(U[i] @ others / den) if den > 0 else 0.0)
+    scores = krum_scores(updates, krum_f)
+    krank = np.argsort(np.argsort(scores, kind="stable"), kind="stable")
+    return {"trimmed_share": trimmed.round(4).tolist(), "dist_to_median": dist.round(5).tolist(),
+            "cos_to_others": [round(c, 4) for c in cos], "krum_rank": krank.tolist(),
+            "update_norm": np.linalg.norm(U, axis=1).round(5).tolist()}
 
 
 # --- Federated simulation -----------------------------------------------------
@@ -302,6 +404,8 @@ def run(cfg, data, part, seed, final, device):
             loader = make_loader(cl["X"], cl["y_train"], t["batch_size"])
             losses.append(train_epochs(local_model, loader, optimizer, t["local_epochs"], device))
             updates.append((get_weights(local_model), len(cl["y_train"])))
+        diag = client_diagnostics(updates, global_weights,
+                                  trim_count(k_clients, fed["trim_beta"]), int(fed.get("krum_f", 2)))
         set_weights(global_model, aggregate(updates, fed))
 
         val = compute_metrics(y_val, predict_proba(global_model, X_val, device))
@@ -313,6 +417,7 @@ def run(cfg, data, part, seed, final, device):
             "val_binary_fpr": val["binary_fpr"],
             "mean_client_loss": float(np.mean(losses)),
             "client_losses": [float(x) for x in losses],
+            "client_diagnostics": diag,
             "round_sec": time.perf_counter() - t0,
             "cumulative_bytes": comm["total_per_round"] * rnd,
         })
@@ -343,6 +448,10 @@ def run(cfg, data, part, seed, final, device):
                 "values_averaged": k_clients - 2 * trim_count(k_clients, fed["trim_beta"]),
                 "stress_test": len(attackers) > trim_count(k_clients, fed["trim_beta"]),
                 } if fed["aggregation"] == "trimmed_mean" else {}),
+            **({"krum_f": int(fed.get("krum_f", 2)),
+                "clients_kept": 1 if fed["aggregation"] == "krum"
+                else int(fed.get("multi_krum_m") or k_clients - int(fed.get("krum_f", 2)))}
+               if fed["aggregation"] in ("krum", "multi_krum") else {}),
         },
         "model_selection": "global model after the last round",
         "history": history,
@@ -395,7 +504,8 @@ def main(argv=None):
     if len(part["train"]) != len(data["train"][1]) or len(part["val"]) != len(data["val"][1]):
         raise ValueError("Partition does not match the splits. Re-run src/prepare_data.py.")
     k = cfg["partition"]["num_clients"]
-    part["attackers"] = (select_attackers(cfg["attack"], data["train"][1], part["train"], k)
+    part["attackers"] = (select_attackers(cfg["attack"], data["train"][1], part["train"], k,
+                                          cfg["data"]["seed"])
                          if cfg["attack"]["enabled"] else [])
     if part["attackers"]:
         print(f"attackers: {part['attackers']} ({len(part['attackers'])}/{k} clients, "

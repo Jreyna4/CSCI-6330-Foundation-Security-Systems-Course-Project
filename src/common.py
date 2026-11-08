@@ -320,6 +320,12 @@ def load_split(cfg, name):
         raise FileNotFoundError(f"{path} not found. Run src/prepare_data.py first.")
     df = pd.read_parquet(path)
     feature_cols = [c for c in df.columns if c not in NON_FEATURE_COLS | {"label"}]
+    # Ablation at model-input time: same rows, splits and clients, fewer features.
+    ablate = cfg["data"].get("ablate_features") or []
+    missing = [c for c in ablate if c not in feature_cols]
+    if missing:
+        raise ValueError(f"data.ablate_features not found in the data: {missing}")
+    feature_cols = [c for c in feature_cols if c not in ablate]
     # copy=True: pandas 3 returns read-only arrays, which PyTorch warns about.
     X = df[feature_cols].to_numpy(dtype=np.float32, copy=True)
     y = df["y"].to_numpy(dtype=np.int64, copy=True)

@@ -1,0 +1,6 @@
+# multi_krum aggregation with label-flipping client(s).
+experiment: multikrum_noniid_poisoned
+federated:
+  aggregation: multi_krum
+attack:
+  enabled: true

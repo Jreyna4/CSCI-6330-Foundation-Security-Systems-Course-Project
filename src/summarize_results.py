@@ -7,6 +7,8 @@ Writes (into the results directory):
                             (same seed = same initial weights and poisoned records)
   per_client.csv            each client's held-out macro F1 / FNR per run
   per_class.csv             per-family precision / recall / FNR / FPR with support
+  attack_table.csv          every attacked run: paired change vs. its own clean
+                            run and vs. FedAvg under the same attack
   hypothesis_check.csv      H1/H2 per seed, plus the split of the recovery into
                             "dropping size weighting" and "trimming" when the
                             unweighted-mean control was run
@@ -146,6 +148,57 @@ def hypothesis_check(df, split):
     return out
 
 
+def clean_baseline(exp, names):
+    """Own clean run of an attacked experiment, e.g.
+    fedavg_noniid_poisoned_r60 -> fedavg_noniid_r60, else fedavg_noniid;
+    krum_noniid_poisoned_atkrand1 -> krum_noniid."""
+    if "_poisoned" not in exp:
+        return None
+    head, tail = exp.split("_poisoned", 1)
+    for cand in (head + tail, head):
+        if cand in names:
+            return cand
+    return None
+
+
+def fedavg_counterpart(exp, names):
+    """FedAvg under the same attack: <rule>_noniid_poisoned<x> -> fedavg_noniid_poisoned<x>."""
+    if "_noniid_poisoned" not in exp or exp.startswith("fedavg_"):
+        return None
+    cand = "fedavg_noniid_poisoned" + exp.split("_noniid_poisoned", 1)[1]
+    return cand if cand in names else None
+
+
+def attack_table(df, split):
+    """One row per attacked experiment: paired attack cost against its own
+    clean run, and paired gain against FedAvg under the same attack."""
+    f1, fnr = f"{split}_macro_f1", f"{split}_binary_fnr"
+    names = set(df.experiment)
+    piv = {m: df.pivot_table(index="seed", columns="experiment", values=m) for m in (f1, fnr)}
+    rows = []
+    for exp in sorted(names):
+        base = clean_baseline(exp, names)
+        if base is None:
+            continue
+        row = {"experiment": exp, "clean_baseline": base,
+               "attackers": df.loc[df.experiment == exp, "attackers"].iloc[0]}
+        for tag, m in (("f1", f1), ("fnr", fnr)):
+            d = 100 * (piv[m][exp] - piv[m][base]).dropna()
+            row[f"n_seeds"] = len(d)
+            row[f"clean_{tag}"] = piv[m][base].mean()
+            row[f"attacked_{tag}"] = piv[m][exp].mean()
+            row[f"attack_change_{tag}_pts"] = d.mean()
+            row[f"attack_change_{tag}_std"] = d.std()
+        fa = fedavg_counterpart(exp, names)
+        if fa:
+            for tag, m in (("f1", f1), ("fnr", fnr)):
+                d = 100 * (piv[m][exp] - piv[m][fa]).dropna()
+                row[f"vs_fedavg_{tag}_pts"] = d.mean()
+                row[f"vs_fedavg_{tag}_std"] = d.std()
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def per_client_table(runs, key):
     rows = []
     for exp, seeds in runs.items():
@@ -237,6 +290,16 @@ def main(argv=None):
         hyp.to_csv(results_dir / "hypothesis_check.csv")
         print("\n== Hypothesis check per seed ==")
         print(hyp.to_string(float_format="%.2f"))
+
+    at = attack_table(df, args.split)
+    if not at.empty:
+        at.to_csv(results_dir / "attack_table.csv", index=False)
+        print("\n== Every attacked run vs. its own clean run, and vs. FedAvg under the same attack ==")
+        cols = ["experiment", "attackers", "n_seeds", "attack_change_f1_pts", "attack_change_fnr_pts",
+                "attacked_fnr"] + [c for c in ("vs_fedavg_f1_pts", "vs_fedavg_fnr_pts") if c in at]
+        show = at[cols].copy()
+        show["attacked_fnr"] = 100 * show["attacked_fnr"]
+        print(show.to_string(index=False, float_format="%.2f"))
 
     key = "per_client_val" if args.split == "val" else "per_client_test"
     pc = per_client_table(runs, key)

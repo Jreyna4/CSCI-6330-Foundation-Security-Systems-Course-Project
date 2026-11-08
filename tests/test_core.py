@@ -284,3 +284,54 @@ def test_group_split_search_hits_targets():
     assert not (set(groups[tr]) & set(groups[te])) and not (set(groups[va]) & set(groups[te]))
     tr2, va2, te2, _ = prepare_data.search_group_split(y, groups, 0.2, 0.1, 42, 500)
     assert (te == te2).all()  # deterministic
+
+
+def test_krum_drops_the_outlier():
+    import run_federated
+    honest = [([np.array([1.0, 1.0]) + 0.01 * i], 10) for i in range(8)]
+    bad = [([np.array([50.0, -50.0])], 100), ([np.array([40.0, -45.0])], 100)]
+    ups = honest + bad
+    out, kept = run_federated.multi_krum(ups, f=2, m=1)
+    assert kept[0] < 8 and np.allclose(out[0], [1.0, 1.0], atol=0.1)
+    out_m, kept_m = run_federated.multi_krum(ups, f=2, m=8)
+    assert kept_m == list(range(8))
+    agg = run_federated.aggregate(ups, {"aggregation": "multi_krum", "krum_f": 2, "multi_krum_m": None})
+    assert np.allclose(agg[0], out_m[0])
+
+
+def test_client_diagnostics_flag_the_outlier():
+    import run_federated
+    g = [np.zeros(50)]
+    rng = np.random.default_rng(0)
+    ups = [([rng.normal(0, 0.1, 50)], 10) for _ in range(9)] + [([np.full(50, 5.0)], 10)]
+    d = run_federated.client_diagnostics(ups, g, trim_k=2, krum_f=2)
+    assert d["trimmed_share"][9] == 1.0          # always in the top tail
+    assert d["krum_rank"][9] == 9                # least typical
+    assert np.argmax(d["dist_to_median"]) == 9
+    assert all(0.0 <= t <= 1.0 for t in d["trimmed_share"])
+
+
+def test_attacker_selection_modes():
+    import run_federated
+    atk = {"target_label": "Benign", "num_attackers": 1, "min_rows_per_family": 1,
+           "min_attack_families": 2, "selection": "median_size", "attacker_clients": []}
+    # client sizes 10, 20, 30, 40, 50 (median 30); families 1 and 2 everywhere
+    clients = np.repeat(np.arange(5), [10, 20, 30, 40, 50])
+    y = np.tile([1, 2], len(clients) // 2)
+    assert run_federated.select_attackers(atk, y, clients, 5) == [2]
+    r1 = run_federated.select_attackers({**atk, "selection": "random", "random_draw": 0}, y, clients, 5, 42)
+    r2 = run_federated.select_attackers({**atk, "selection": "random", "random_draw": 0}, y, clients, 5, 42)
+    assert r1 == r2 and len(r1) == 1                      # deterministic
+    draws = {tuple(run_federated.select_attackers({**atk, "selection": "random", "random_draw": d},
+                                                  y, clients, 5, 42)) for d in range(6)}
+    assert len(draws) > 1                                 # different draws differ
+
+
+def test_clean_baseline_and_counterpart_names():
+    from summarize_results import clean_baseline, fedavg_counterpart
+    names = {"fedavg_noniid", "fedavg_noniid_r60", "fedavg_noniid_poisoned_r60", "krum_noniid",
+             "krum_noniid_poisoned_atkrand1", "fedavg_noniid_poisoned_atkrand1"}
+    assert clean_baseline("fedavg_noniid_poisoned_r60", names) == "fedavg_noniid_r60"
+    assert clean_baseline("krum_noniid_poisoned_atkrand1", names) == "krum_noniid"
+    assert clean_baseline("fedavg_noniid", names) is None
+    assert fedavg_counterpart("krum_noniid_poisoned_atkrand1", names) == "fedavg_noniid_poisoned_atkrand1"

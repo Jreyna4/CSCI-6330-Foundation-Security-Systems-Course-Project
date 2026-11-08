@@ -163,6 +163,9 @@ def test_runs_are_paired_and_summarized(cfg):
     deltas = pd.read_csv(res / "paired_deltas.csv")
     assert {"trimming_gain_under_attack", "unweighting_gain_under_attack"} <= set(deltas.comparison)
 
+    assert (res / "attack_table.csv").exists()
+    assert "client_diagnostics" in pois["history"][0]
+
     error_analysis.main(["--config", str(_write_cfg(cfg, res.parent))])
     an = res / "analysis"
     fp = pd.read_csv(an / "per_family_paired.csv")
@@ -170,6 +173,17 @@ def test_runs_are_paired_and_summarized(cfg):
     cp = pd.read_csv(an / "per_client_paired.csv")
     assert cp["client"].nunique() == 5
     assert (an / "family_missed_as_benign.png").exists() and (an / "client_attack_cost.png").exists()
+    dg = pd.read_csv(an / "update_diagnostics.csv")
+    assert dg["attacker"].any() and dg["trimmed_share"].between(0, 1).all()
+
+
+def test_ablation_keeps_rows_and_drops_feature(cfg):
+    X, y, cols = common.load_split(cfg, "train_pool")
+    abl = common.apply_overrides(cfg, ["data.ablate_features=[IAT]"])
+    Xa, ya, cols_a = common.load_split(abl, "train_pool")
+    assert "IAT" in cols and "IAT" not in cols_a
+    assert len(cols_a) == len(cols) - 1 and Xa.shape[0] == X.shape[0]
+    assert (ya == y).all()
 
 
 def _write_cfg(cfg, folder):
