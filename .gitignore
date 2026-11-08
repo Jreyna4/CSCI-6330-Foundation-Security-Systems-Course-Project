@@ -20,6 +20,13 @@ results/*
 results_pilot/
 data/processed_pilot/
 
+# Sensitivity run without IAT (configs/no_iat.yaml)
+results_no_iat/
+data/processed_no_iat/
+
+# Result bundles zipped to share (e.g. m2_results.zip)
+*.zip
+
 # LaTeX build files
 *.aux
 *.bbl

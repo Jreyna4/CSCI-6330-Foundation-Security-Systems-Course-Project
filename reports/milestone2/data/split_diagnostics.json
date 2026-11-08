@@ -1,0 +1,25 @@
+{
+  "n_query_per_split": 2000,
+  "distance": "euclidean, on signed-log + standardized features (train-fit)",
+  "train_to_other_train": {
+    "median": 0.13064203411340714,
+    "p10": 6.751556647941471e-05,
+    "p90": 0.8853327214717867,
+    "exact_duplicates": 6,
+    "share_within_0.01": 0.3185
+  },
+  "val_to_train": {
+    "median": 0.12301246076822281,
+    "p10": 5.680237882188522e-05,
+    "p90": 0.8909856259822846,
+    "exact_duplicates": 6,
+    "share_within_0.01": 0.3385
+  },
+  "test_to_train": {
+    "median": 0.11986586079001427,
+    "p10": 6.458197021856904e-05,
+    "p90": 0.8727258265018464,
+    "exact_duplicates": 2,
+    "share_within_0.01": 0.331
+  }
+}

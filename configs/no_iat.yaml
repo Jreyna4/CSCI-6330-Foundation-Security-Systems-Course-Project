@@ -1,0 +1,5 @@
+paths:
+  processed_dir: data/processed_no_iat
+  results_dir: results_no_iat
+data:
+  drop_cols: [IAT]
