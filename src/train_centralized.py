@@ -28,6 +28,7 @@ from common import (
     load_config,
     load_manifest,
     load_partition,
+    loss_weights,
     make_loader,
     predict_proba,
     repo_path,
@@ -51,8 +52,9 @@ def run(cfg, data, seed, final, device):
 
     start = time.perf_counter()
     history = []
+    cw = loss_weights(cfg, y_train, len(FAMILIES))
     for epoch in range(1, t["epochs"] + 1):
-        loss = train_epochs(model, loader, optimizer, 1, device)
+        loss = train_epochs(model, loader, optimizer, 1, device, cw)
         val = compute_metrics(y_val, predict_proba(model, X_val, device))
         history.append({"epoch": epoch, "train_loss": loss,
                         "val_macro_f1": val["macro_f1"], "val_accuracy": val["accuracy"]})

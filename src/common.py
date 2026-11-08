@@ -432,9 +432,30 @@ def make_loader(X, y, batch_size, shuffle=True):
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
 
 
-def train_epochs(model, loader, optimizer, epochs, device):
-    """Train in place with unweighted cross-entropy. Returns the mean loss of the last epoch."""
-    loss_fn = nn.CrossEntropyLoss()
+def loss_weights(cfg, y_train, num_classes):
+    """Class weights for cross-entropy, or None for the unweighted default.
+
+    train.loss_weighting: none | balanced. 'balanced' gives class c the weight
+    n / (K * n_c), computed ONCE from the clean labels of the whole training
+    pool and shared by every client. In a real federation this assumes the
+    global class frequencies are shared as a statistic; local per-client
+    weights would explode for classes a client barely holds.
+    """
+    mode = cfg["train"].get("loss_weighting", "none")
+    if mode in (None, "none"):
+        return None
+    if mode != "balanced":
+        raise ValueError(f"Unknown train.loss_weighting: {mode}")
+    counts = np.bincount(y_train, minlength=num_classes).astype(np.float64)
+    w = np.where(counts > 0, len(y_train) / (num_classes * np.maximum(counts, 1)), 0.0)
+    return torch.tensor(w, dtype=torch.float32)
+
+
+def train_epochs(model, loader, optimizer, epochs, device, class_weights=None):
+    """Train in place with cross-entropy (optionally class-weighted).
+    Returns the mean loss of the last epoch."""
+    loss_fn = nn.CrossEntropyLoss(
+        weight=class_weights.to(device) if class_weights is not None else None)
     model.train()
     total, n = 0.0, 0
     for _ in range(epochs):

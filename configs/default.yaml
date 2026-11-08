@@ -55,6 +55,7 @@ train:
   lr: 0.001
   weight_decay: 0.0
   batch_size: 256          # also the local batch size of every client
+  loss_weighting: none     # none | balanced (class weights from the clean training pool, shared)
   epochs: 30               # centralized only
   local_epochs: 1          # federated: epochs per client per round
   # Loss: unweighted cross-entropy. Federated clients get a fresh Adam state
@@ -81,6 +82,9 @@ attack:
   num_attackers: 1         # 1 of 10 = 10%; sweep 1-3 to vary the malicious ratio
   selection: most_attack_rows  # most_attack_rows | median_size | random | fixed (same clients for every seed)
   random_draw: 0           # which seeded draw when selection: random (0, 1, 2, ...)
+  # Targeted attack: flip only these families (null = every attack family).
+  # Use with selection: most_source_rows to pick the client holding most of them.
+  source_families: null
   attacker_clients: []     # used only when selection: fixed
   flip_fraction: 0.5       # share of the attacker's attack rows relabeled
   flip_per_family: true    # apply the 50% within every attack family

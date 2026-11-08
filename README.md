@@ -48,6 +48,7 @@ In a ten-client federated IDS trained on non-IID partitions of CICIoT2023, how m
 | S | Conditions 3, 5b and 4b with 2 and 3 attackers (**stress test**, run last) | `scripts/run_attacker_sweep.sh` |
 | 6 | **Median**, **Krum** and **multi-Krum**, clean and attacked | `configs/{median,krum,multikrum}_noniid*.yaml` |
 | R | Robustness runs: 5 seeds, typical-sized and random attackers, IAT ablation | `scripts/run_robustness.sh` |
+| E | Extensions: attack strength (25% / 100% flipped), targeted Recon→Benign attack, class-balanced loss, 20 clients with 2 attackers | `scripts/run_extensions.sh` |
 
 **More defenses (condition 6).** Trimmed mean and the median judge each parameter separately. Label flipping shifts a client's whole update a little rather than a few parameters a lot, so we also run **Krum** and **multi-Krum** (Blanchard et al., 2017), which score each client's *entire* update by its distance to the others and keep the most typical one (Krum) or the `n - krum_f` most typical ones (multi-Krum, averaged without weighting).
 
@@ -235,6 +236,10 @@ bash scripts/run_attacker_sweep.sh          # 2 and 3 attackers
 
 # 6. Robustness runs for the final report (about 75 minutes)
 caffeinate -i bash scripts/run_robustness.sh
+
+# 7. Extensions (about 50 minutes): attack strength, targeted attack,
+#    class-balanced loss (results_balanced/), 20 clients (results_k20/)
+caffeinate -i bash scripts/run_extensions.sh
 ```
 
 Steps 1-4 are also `bash scripts/run_all.sh`. On Windows without bash, run the Python commands above.
