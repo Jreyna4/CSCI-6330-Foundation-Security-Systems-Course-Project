@@ -1,0 +1,11 @@
+# Feature ablation without IAT, done cleanly: the column is removed at model
+# input time, AFTER the subset, split and client partition are built, so the
+# rows, clients and attacker are identical to the main runs and only the
+# feature set changes. (configs/no_iat.yaml drops IAT before de-duplication,
+# which changes the subset and partition; this file replaces it.)
+# Stack it in front of an experiment file:
+#   python src/run_federated.py --config configs/ablate_iat.yaml configs/fedavg_noniid.yaml
+paths:
+  results_dir: results_ablate_iat
+data:
+  ablate_features: [IAT]

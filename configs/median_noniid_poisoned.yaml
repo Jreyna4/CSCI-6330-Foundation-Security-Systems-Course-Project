@@ -1,0 +1,6 @@
+# median aggregation with label-flipping client(s).
+experiment: median_noniid_poisoned
+federated:
+  aggregation: median
+attack:
+  enabled: true

@@ -46,6 +46,16 @@ In a ten-client federated IDS trained on non-IID partitions of CICIoT2023, how m
 | 5a | **Unweighted mean**, non-IID, clean (control) | `configs/mean_noniid.yaml` |
 | 5b | **Unweighted mean**, non-IID, one label-flipping client (control) | `configs/mean_noniid_poisoned.yaml` |
 | S | Conditions 3, 5b and 4b with 2 and 3 attackers (**stress test**, run last) | `scripts/run_attacker_sweep.sh` |
+| 6 | **Median**, **Krum** and **multi-Krum**, clean and attacked | `configs/{median,krum,multikrum}_noniid*.yaml` |
+| R | Robustness runs: 5 seeds, typical-sized and random attackers, IAT ablation | `scripts/run_robustness.sh` |
+
+**More defenses (condition 6).** Trimmed mean and the median judge each parameter separately. Label flipping shifts a client's whole update a little rather than a few parameters a lot, so we also run **Krum** and **multi-Krum** (Blanchard et al., 2017), which score each client's *entire* update by its distance to the others and keep the most typical one (Krum) or the `n - krum_f` most typical ones (multi-Krum, averaged without weighting).
+
+**Attacker size vs. poisoning.** With `attack.selection: most_attack_rows` the attacker is also the largest client, which FedAvg weights most. `scripts/run_robustness.sh` repeats the attack from a typical-sized client (`selection: median_size`) and from randomly drawn clients (`selection: random`, `random_draw: 0/1/3`); the attacker is fixed by the data seed and the draw, so it is the same in every condition and run seed.
+
+**Update diagnostics.** Every round, for every client, the run records the share of its parameters that fall in the trimmed tails (0.40 if values were in random order, with 10 clients and 2 trimmed per side), the distance of its update to the median update, its cosine similarity to the other clients and its Krum rank. `error_analysis.py` compares the attacker with the honest clients, which shows directly whether the attacker's update looks unusual to each defense.
+
+**Feature ablation.** `data.ablate_features` removes columns at model-input time, after the subset, split and partition are built, so rows, clients and the attacker stay identical (`configs/ablate_iat.yaml`). It replaces `configs/no_iat.yaml`, which drops IAT before de-duplication and therefore changes the subset and partition.
 
 **Why the unweighted-mean control (Milestone 1 feedback).** FedAvg weights each client by its size; trimmed mean does not. Comparing them directly mixes two changes. With condition 5: FedAvg → unweighted mean isolates the **weighting**, and unweighted mean → trimmed mean isolates the **trimming**. This matters here because the attacker is the largest client, so FedAvg gives it the most weight. `summarize_results.py` reports both parts (`unweighting_gain_under_attack`, `trimming_gain_under_attack`) and splits the H2 recovery accordingly.
 
@@ -222,6 +232,9 @@ python src/error_analysis.py
 
 # 5. Later: attacker sweep (stress test), after the paired comparison
 bash scripts/run_attacker_sweep.sh          # 2 and 3 attackers
+
+# 6. Robustness runs for the final report (about 75 minutes)
+caffeinate -i bash scripts/run_robustness.sh
 ```
 
 Steps 1-4 are also `bash scripts/run_all.sh`. On Windows without bash, run the Python commands above.
@@ -238,7 +251,7 @@ Scripts report **validation** metrics only. Add `--final` (or `FINAL=1 bash scri
 - **Communication proxy:** raw float32 model bytes. Per participating client per round, one download (global model) plus one upload (full local model). Also reported per round for all clients and cumulatively per run. Downloads are included; compression and protocol overhead are not.
 - **Runtime:** single-machine simulation time, stored with a hardware description (CPU, cores, RAM, GPU if any, torch version and threads) and peak resident memory.
 
-Output tables in `results/`: `runs.csv`, `summary.csv`, `paired_deltas.csv`, `hypothesis_check.csv`, `per_client.csv`, `per_class.csv`, `convergence_val_f1.png`.
+Output tables in `results/`: `runs.csv`, `summary.csv`, `paired_deltas.csv`, `attack_table.csv` (every attacked run vs. its own clean run and vs. FedAvg under the same attack), `hypothesis_check.csv`, `per_client.csv`, `per_class.csv`, `convergence_val_f1.png`.
 
 **Error analysis** (`src/error_analysis.py`, Milestone 2 priority), in `results/analysis/`: `per_family.csv` and `per_family_paired.csv` (per family: recall, F1 and the share of rows predicted **Benign**, the attacker's target, with paired deltas over seeds), `per_client.csv` and `per_client_paired.csv` (each client's held-out macro F1 and FNR with its training mix and attacker flag, with paired deltas), and two black-and-white figures: `family_missed_as_benign.png` and `client_attack_cost.png`.
 

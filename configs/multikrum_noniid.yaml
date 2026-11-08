@@ -1,0 +1,4 @@
+# Clean non-IID run with multi_krum aggregation (comparison defense).
+experiment: multikrum_noniid
+federated:
+  aggregation: multi_krum
