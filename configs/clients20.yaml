@@ -1,0 +1,13 @@
+# Sensitivity check: 20 Dirichlet clients with 2 attackers (the same 10%
+# malicious share as the main 10-client setup). Trimmed mean then trims 4 per
+# side and Krum tolerates krum_f = 4. Partitions are written as *_k20 files
+# next to the 10-client ones (nothing is overwritten):
+#   python src/prepare_data.py --partitions-only --config configs/clients20.yaml
+paths:
+  results_dir: results_k20
+partition:
+  num_clients: 20
+attack:
+  num_attackers: 2
+federated:
+  krum_f: 4

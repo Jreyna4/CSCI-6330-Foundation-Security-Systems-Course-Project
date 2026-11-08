@@ -1,0 +1,8 @@
+# Better-model check: class-balanced cross-entropy (rare families such as Web
+# and BruteForce count more). Same data, clients and attacker; separate
+# results folder. Stack in front of an experiment file:
+#   python src/run_federated.py --config configs/balanced_loss.yaml configs/fedavg_noniid.yaml
+paths:
+  results_dir: results_balanced
+train:
+  loss_weighting: balanced

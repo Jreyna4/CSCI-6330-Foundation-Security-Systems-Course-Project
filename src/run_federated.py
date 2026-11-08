@@ -63,6 +63,7 @@ from common import (
     load_config,
     load_manifest,
     load_partition,
+    loss_weights,
     make_loader,
     predict_proba,
     repo_path,
@@ -77,14 +78,17 @@ from common import (
 
 # --- Attack: label flipping ---------------------------------------------------
 
-def flip_labels(y, flip_fraction, target_id, rng, per_family=True):
+def flip_labels(y, flip_fraction, target_id, rng, per_family=True, source_ids=None):
     """Return (poisoned copy of y, sorted indices of flipped rows).
 
-    Candidates are rows whose label is not `target_id`. With per_family, the
-    fraction is applied within each attack family separately.
+    Candidates are rows whose label is not `target_id`, restricted to the
+    families in `source_ids` when given (targeted attack). With per_family,
+    the fraction is applied within each attack family separately.
     """
     y = y.copy()
     candidates = np.flatnonzero(y != target_id)
+    if source_ids is not None:
+        candidates = candidates[np.isin(y[candidates], source_ids)]
     groups = [candidates[y[candidates] == c] for c in np.unique(y[candidates])] if per_family else [candidates]
     chosen = []
     for g in groups:
@@ -138,6 +142,11 @@ def select_attackers(atk, y, client_ids, num_clients, data_seed=42):
         chosen = list(atk["attacker_clients"])
     elif sel == "most_attack_rows":
         order = sorted(prof, key=lambda p: (-p["attack_rows"], p["client"]))
+        chosen = [p["client"] for p in order[:m]]
+    elif sel == "most_source_rows":
+        # targeted attack: the clients holding the most rows of the flipped families
+        src = [FAMILY_TO_ID[f] for f in atk["source_families"]]
+        order = sorted(prof, key=lambda p: (-int(p["family_counts"][src].sum()), p["client"]))
         chosen = [p["client"] for p in order[:m]]
     elif sel in ("median_size", "random"):
         pool = eligible_attackers(atk, prof)
@@ -322,8 +331,10 @@ def build_clients(cfg, X, y, client_ids, attackers, seed):
             # Own RNG per (seed, client): independent of torch randomness, so
             # the clean/attacked/defended runs stay paired.
             rng = np.random.default_rng([seed, c, 7919])
+            src = atk.get("source_families")
             y_used, flipped = flip_labels(y_clean, atk["flip_fraction"], target, rng,
-                                          atk["flip_per_family"])
+                                          atk["flip_per_family"],
+                                          [FAMILY_TO_ID[f] for f in src] if src else None)
         clients.append({"X": X[idx], "y_clean": y_clean, "y_train": y_used,
                         "flipped_local_idx": flipped, "pool_idx": idx})
     return clients
@@ -373,6 +384,7 @@ def run(cfg, data, part, seed, final, device):
     attackers = part["attackers"] if atk["enabled"] else []
 
     clients = build_clients(cfg, X_train, y_train, part["train"], attackers, seed)
+    cw = loss_weights(cfg, y_train, len(FAMILIES))  # clean pool labels, shared by all clients
     for c, cl in enumerate(clients):
         tag = " (ATTACKER)" if c in attackers else ""
         print(f"client {c}: {len(cl['y_train'])} rows, {len(cl['flipped_local_idx'])} labels flipped{tag}")
@@ -402,7 +414,7 @@ def run(cfg, data, part, seed, final, device):
             set_weights(local_model, global_weights)
             optimizer = build_optimizer(cfg, local_model.parameters())  # fresh each round
             loader = make_loader(cl["X"], cl["y_train"], t["batch_size"])
-            losses.append(train_epochs(local_model, loader, optimizer, t["local_epochs"], device))
+            losses.append(train_epochs(local_model, loader, optimizer, t["local_epochs"], device, cw))
             updates.append((get_weights(local_model), len(cl["y_train"])))
         diag = client_diagnostics(updates, global_weights,
                                   trim_count(k_clients, fed["trim_beta"]), int(fed.get("krum_f", 2)))

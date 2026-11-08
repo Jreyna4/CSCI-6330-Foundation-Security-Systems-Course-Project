@@ -20,9 +20,12 @@ results/*
 results_pilot/
 data/processed_pilot/
 
-# Sensitivity run without IAT (configs/no_iat.yaml)
+# Sensitivity and extension runs (separate results folders)
 results_no_iat/
 data/processed_no_iat/
+results_ablate_iat/
+results_balanced/
+results_k20/
 
 # Result bundles zipped to share (e.g. m2_results.zip)
 *.zip

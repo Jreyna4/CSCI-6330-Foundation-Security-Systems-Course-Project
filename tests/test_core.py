@@ -335,3 +335,30 @@ def test_clean_baseline_and_counterpart_names():
     assert clean_baseline("krum_noniid_poisoned_atkrand1", names) == "krum_noniid"
     assert clean_baseline("fedavg_noniid", names) is None
     assert fedavg_counterpart("krum_noniid_poisoned_atkrand1", names) == "fedavg_noniid_poisoned_atkrand1"
+
+
+def test_targeted_flip_only_touches_source_family():
+    import run_federated
+    y = np.array([0, 1, 1, 3, 3, 3, 3, 6, 6])
+    y2, idx = run_federated.flip_labels(y, 1.0, 0, np.random.default_rng(0), True, [3])
+    assert (y2[[3, 4, 5, 6]] == 0).all() and (y2[[1, 2, 7, 8]] == y[[1, 2, 7, 8]]).all()
+    assert list(idx) == [3, 4, 5, 6]
+
+
+def test_most_source_rows_picks_holder_of_target_family():
+    import run_federated
+    atk = {"target_label": "Benign", "num_attackers": 1, "min_rows_per_family": 1,
+           "min_attack_families": 1, "selection": "most_source_rows",
+           "source_families": ["Recon"], "attacker_clients": []}
+    # client 0: many DDoS; client 1: most Recon
+    y = np.array([1] * 50 + [3] * 2 + [3] * 10 + [1] * 1)
+    clients = np.array([0] * 52 + [1] * 11)
+    assert run_federated.select_attackers(atk, y, clients, 2) == [1]
+
+
+def test_balanced_loss_weights():
+    from common import loss_weights
+    y = np.array([0] * 6 + [1] * 2 + [2] * 2)
+    assert loss_weights({"train": {"loss_weighting": "none"}}, y, 4) is None
+    w = loss_weights({"train": {"loss_weighting": "balanced"}}, y, 4).numpy()
+    assert np.allclose(w[:3], [10 / 24, 10 / 8, 10 / 8]) and w[3] == 0.0
