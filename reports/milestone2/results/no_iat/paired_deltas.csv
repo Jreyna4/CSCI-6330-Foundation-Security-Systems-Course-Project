@@ -1,0 +1,4 @@
+comparison,baseline,treatment,seed,delta_macro_f1_points
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,42,-1.1644900529434343
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,43,-1.073840731994058
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,44,-1.5070010509846243
