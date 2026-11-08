@@ -3,7 +3,7 @@
 A simulated multi-site study on CICIoT2023.
 Course project for **CSCI 6330: Foundations of Intelligent Security Systems** (Fall 2026), The University of Texas Rio Grande Valley.
 
-> **Status:** Milestone 2 report and results in [`reports/milestone2/`](reports/milestone2/) (all 63 files, 3 seeds, attacker sweep, 60-round and no-IAT checks). Milestone 1 report and slides in [`reports/`](reports/). Response to the Milestone 1 feedback: [`reports/milestone1_feedback_response.md`](reports/milestone1_feedback_response.md).
+> **Status:** Pipeline revised to address the proposal feedback (see [`reports/feedback_response.md`](reports/feedback_response.md)). Milestone 1 submitted (Oct 25): report in [`reports/milestone1_report.pdf`](reports/milestone1_report.pdf), slides in [`reports/milestone1_slides.pdf`](reports/milestone1_slides.pdf). A pilot on 12 of 63 CICIoT2023 files (5 rounds, seed 42) ran end to end; the full runs are next (Milestone 2).
 
 ## Team
 
