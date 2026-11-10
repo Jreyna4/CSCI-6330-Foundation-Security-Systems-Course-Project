@@ -1,0 +1,13 @@
+comparison,baseline,treatment,seed,delta_macro_f1_points
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,42,-0.5857258619322625
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,43,0.3223612662306752
+attack_cost_fedavg,fedavg_noniid,fedavg_noniid_poisoned,44,-0.5891166675956128
+attack_cost_trimmed,fedavg_noniid,trimmed_noniid_poisoned,42,-2.332989400620389
+attack_cost_trimmed,fedavg_noniid,trimmed_noniid_poisoned,43,-2.1301802918367363
+attack_cost_trimmed,fedavg_noniid,trimmed_noniid_poisoned,44,-2.5470315244566333
+defense_gain_under_attack,fedavg_noniid_poisoned,trimmed_noniid_poisoned,42,-1.7472635386881263
+defense_gain_under_attack,fedavg_noniid_poisoned,trimmed_noniid_poisoned,43,-2.4525415580674115
+defense_gain_under_attack,fedavg_noniid_poisoned,trimmed_noniid_poisoned,44,-1.9579148568610205
+defense_cost_clean,fedavg_noniid,trimmed_noniid,42,-1.182516535708844
+defense_cost_clean,fedavg_noniid,trimmed_noniid,43,-1.266073113198396
+defense_cost_clean,fedavg_noniid,trimmed_noniid,44,-1.4574041774810031

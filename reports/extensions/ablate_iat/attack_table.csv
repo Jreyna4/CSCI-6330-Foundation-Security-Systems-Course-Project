@@ -1,0 +1,2 @@
+experiment,clean_baseline,attackers,n_seeds,clean_f1,attacked_f1,attack_change_f1_pts,attack_change_f1_std,clean_fnr,attacked_fnr,attack_change_fnr_pts,attack_change_fnr_std
+fedavg_noniid_poisoned,fedavg_noniid,5,5,0.6872816571944347,0.6767342736367079,-1.0547383557726664,0.43882184528556556,0.07246591351772497,0.11350993377483443,4.104402025710947,0.5369047050041573
