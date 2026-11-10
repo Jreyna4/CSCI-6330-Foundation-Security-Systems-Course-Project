@@ -1,6 +1,6 @@
 # Milestone 2 (Progress Presentation 2)
 
-- `milestone2_report.pdf` / `.tex`: the 3-page report (IEEE journal template). Figures: `families_benign.png`, `clients_fnr.png`.
+- `milestone2_report.pdf` / `.tex`: the 3-page report (IEEE journal template). Figure: `families_benign.png`. Updated Nov 9 with the robustness and extension results (5 seeds, more defenses, attacker size, attack strength, targeted attack); those numbers come from `reports/extensions/`.
 - `results/`: frozen copy of the run outputs the report is based on (all 63 files, seeds 42-44, validation set). The live `results/` folder at the repo root is ignored by git, so this copy keeps the report's numbers traceable.
   - `runs.csv`, `summary.csv`, `paired_deltas.csv`, `hypothesis_check.csv`, `per_class.csv`, `per_client.csv`: from `src/summarize_results.py`. Includes the main 8 conditions, the attacker sweep (`*_m2`, `*_m3`) and the 60-round check (`*_r60`).
   - `analysis/`: per-family and per-client paired error analysis from `src/error_analysis.py`.

@@ -21,7 +21,7 @@
 \maketitle
 
 \begin{abstract}
-We simulate a ten-client federated intrusion detector on CICIoT2023 (all 63 files, 306,124 flows; eight paired conditions, three seeds each) and measure what label-flipping clients cost and whether robust aggregation recovers it. One attacker relabeling half of its attack rows as benign lowers FedAvg's macro F1 by only 1.1 points, so our 3-point hypothesis is not supported. The damage is concentrated: missed attacks rise from 7.2\% to 10.6\%, almost all in the four families that resemble benign traffic. With one attacker neither the unweighted mean nor trimmed mean helps; with two or three, both do, through dropping size weighting rather than trimming. Results hold at 60 rounds and without the IAT feature.
+We simulate a ten-client federated intrusion detector on CICIoT2023 (all 63 files, 306,124 flows) and measure what label-flipping clients cost and whether robust aggregation recovers it, with five paired seeds, six aggregation rules and ten robustness checks. One attacker relabeling half of its attack rows as benign lowers FedAvg's macro F1 by only $1.1\pm0.4$ points, so H1 (3 points) is not supported, and trimmed mean does not recover it (H2 not supported). Macro F1 hides the damage: missed attacks rise from 7.1\% to 10.5\%, almost all in four families that resemble benign traffic, and a Recon-only attack leaves macro F1 unchanged while doubling missed Recon. Damage follows the number of poisoned rows, not attacker size. The defenses detect the attacker but help clearly only against strong attacks.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -49,7 +49,7 @@ Test & 13 & 61,354 & 20.0\% & 9,191 & 9,052 & 9,140 & 9,099 & 4,356 & 2,267 & 8,
 \emph{RQ:} in a ten-client federated IDS on non-IID partitions of CICIoT2023 \cite{neto2023}, how much detection performance is lost when one client flips labels, and does coordinate-wise trimmed mean \cite{yin2018} recover it?
 \emph{Hypotheses:} (H1) FedAvg macro F1 falls by more than 3 points versus the paired clean run; (H2) trimmed mean recovers at least half of that loss.
 
-\emph{Changes after Milestone 1 feedback:} a documented grouped split with per-family supports (Sec.~\ref{sec:split}); the 46$\rightarrow$39 feature mapping (Table~\ref{tab:features}); an \emph{unweighted-mean} control; definitions of label-informed held-out assignment and PR-AUC (Sec.~\ref{sec:metrics}); and, as requested, the paired comparison and per-family/per-client error analysis before the attacker sweep, whose 3-attacker case is a stress test.
+\emph{Changes after Milestone 1 feedback:} a documented grouped split with per-family supports (Sec.~\ref{sec:split}); the 46$\rightarrow$39 feature mapping (Table~\ref{tab:features}); an \emph{unweighted-mean} control; definitions of label-informed held-out assignment and PR-AUC (Sec.~\ref{sec:metrics}); and the paired comparison and per-family/per-client error analysis first, as requested. We also added three defenses, attackers of different sizes, attack strength, a targeted attack and update diagnostics (Sec.~\ref{sec:checks}).
 
 \section{Data and Experimental Design}
 
@@ -64,7 +64,7 @@ Each source file goes entirely into one split, so fractions move in steps of abo
 
 
 \subsection{Features}
-The documentation lists 46 flow features; our release has 39 (Table~\ref{tab:features}), checked on every run (\texttt{feature\_schema.csv}). We do no feature selection: none of the 39 is an identifier (no IPs, ports, MACs or timestamps), the 8 missing ones are not in the files, and selecting on our own data would add a leakage-prone tuning step. Each feature gets $\mathrm{sign}(x)\log(1+|x|)$ (heavy-tailed counts and rates), then standardization fit on the training pool. Dropping IAT, a possible timing shortcut, leaves centralized macro F1 unchanged (.745 vs.\ .741; Sec.~\ref{sec:checks}).
+The documentation lists 46 flow features; our release has 39 (Table~\ref{tab:features}), checked on every run (\texttt{feature\_schema.csv}). We do no feature selection: none of the 39 is an identifier (no IPs, ports, MACs or timestamps), the 8 missing ones are not in the files, and selecting on our own data would add a leakage-prone tuning step. Each feature gets $\mathrm{sign}(x)\log(1+|x|)$ (heavy-tailed counts and rates), then standardization fit on the training pool. Removing IAT, a possible timing shortcut, at model input (same rows and clients) leaves centralized macro F1 unchanged (.742 both ways).
 
 \begin{table}[t]
 \caption{Official 46 features $\rightarrow$ 39 model inputs}
@@ -92,16 +92,16 @@ Held-out rows are assigned to clients with the frozen per-family Dirichlet propo
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{families_benign.png}
-\caption{Share of each family's validation rows predicted Benign, clean vs.\ attacked, for each aggregation rule (mean over 3 seeds; bars show the range). DDoS, DoS and Mirai are never predicted Benign (0.0\% in all conditions) and are omitted.}
+\caption{Share of each family's validation rows predicted Benign (mean over 5 seeds, 3 for the Recon-only attack; bars show the range). DDoS, DoS and Mirai are essentially never predicted Benign ($\leq$0.02\%) and are omitted.}
 \label{fig:families}
 \end{figure*}
 
 \section{Methodology}
 \emph{Model and training} (unchanged, identical in every condition): MLP 39--128--64--8 (ReLU, dropout 0.1; 13,896 parameters), Adam (lr $10^{-3}$), batch 256, cross-entropy; 30 FL rounds of one local epoch with all ten clients in our own simulation loop (Flower \cite{beutel2020} deprecated its simulation API). Each round moves 1.11\,MB (33.4\,MB per run); a run takes about 33\,s on a MacBook Pro CPU (Python 3.14, PyTorch 2.14).
 
-\emph{Aggregation.} FedAvg averages client models weighted by client size. The \emph{unweighted mean} gives every client equal weight. Trimmed mean ($\beta=0.2$) drops, per coordinate, the 2 highest and 2 lowest of the 10 values and averages the remaining 6 without weighting. FedAvg$\rightarrow$mean isolates the effect of size weighting; mean$\rightarrow$trimmed isolates trimming. With one attacker its values \emph{can} all be trimmed, but label flipping need not make them the extreme ones; with three attackers they can survive in every coordinate, so that case is only a stress test.
+\emph{Aggregation.} FedAvg weights client models by size; the \emph{unweighted mean} does not, so FedAvg$\rightarrow$mean isolates weighting. Two per-coordinate rules: trimmed mean ($\beta=0.2$: drop the 2 highest and 2 lowest of 10 values, average 6) and the coordinate-wise median. Two whole-update rules \cite{blanchard2017}: Krum keeps the one client whose update is closest to its neighbours, and multi-Krum averages the 8 most typical ($f=2$). With 3 attackers, attacker values can survive per-coordinate trimming, so that case is a stress test.
 
-\emph{Design and pairing.} Eight conditions (Table~\ref{tab:results}): centralized; FedAvg on IID and Dirichlet clients; and FedAvg, unweighted mean and trimmed mean on Dirichlet clients, clean and attacked. The data seed fixes subset, split and partition; run seeds 42--44 change initialization, batch order and poisoned rows, and same-seed runs start from identical weights, so effects are paired differences (Table~\ref{tab:deltas}), reported as mean, std and range. All results are on validation data; the test set is used once, at the end.
+\emph{Design and pairing.} Centralized, FedAvg on IID clients, and the six rules on Dirichlet clients, clean and attacked (Table~\ref{tab:results}), each with five run seeds (42--46); robustness checks use seeds 42--44. The data seed fixes subset, split and partition; run seeds change initialization, batch order and poisoned rows, and same-seed runs start from identical weights, so effects are paired differences (mean $\pm$ std). Each round we also log, per client, the share of its parameters that fall in the trimmed tails, its distance to the median update and its Krum rank. All results are on validation data; the test set is used once, at the end.
 
 \subsection{Metrics}\label{sec:metrics}
 \emph{Macro F1} averages per-family F1 over families with at least one true row. \emph{Per-family PR-AUC} is one-vs-rest average precision with that family's softmax probability as the score; \emph{macro PR-AUC} averages it over families with at least one positive and one negative row. Families with no support are excluded and listed, never scored 0 or 1, which matters for small per-client held-out sets. We also report the binary miss rate (FNR) and false-alarm rate (FPR), per-family share of rows predicted Benign (the attacker's target), and per-client metrics on each client's held-out rows.
@@ -109,86 +109,73 @@ Held-out rows are assigned to clients with the frozen per-family Dirichlet propo
 \section{Preliminary Results}
 
 \begin{table}[t]
-\caption{Validation results, mean $\pm$ std over 3 seeds}
+\caption{Validation results, mean over 5 seeds; $\Delta$ = paired change under attack (points, mean $\pm$ std)}
 \label{tab:results}
 \centering\footnotesize
-\setlength{\tabcolsep}{3.5pt}
-\begin{tabular}{@{}lcccc@{}}
+\setlength{\tabcolsep}{2.6pt}
+\begin{tabular}{@{}lccccc@{}}
 \toprule
-Condition & Macro F1 & FNR & FPR & Worst client F1 \\
+& \multicolumn{3}{c}{Macro F1} & \multicolumn{2}{c}{Missed attacks (\%)} \\
+\cmidrule(lr){2-4}\cmidrule(l){5-6}
+Rule & Clean & Attacked & $\Delta$ & Clean & $\Delta$ \\
 \midrule
-Centralized & .741 $\pm$ .002 & .068 & .205 & -- \\
-FedAvg, IID & .709 $\pm$ .001 & .075 & .223 & .692 \\
-FedAvg, non-IID & .691 $\pm$ .003 & .072 & .253 & .471 \\
-Unweighted mean & .690 $\pm$ .002 & .082 & .233 & .497 \\
-Trimmed mean & .687 $\pm$ .000 & .084 & .229 & .487 \\
+Centralized & .742 & -- & -- & 6.9 & -- \\
+FedAvg, IID & .710 & -- & -- & 7.5 & -- \\
 \midrule
-FedAvg, attacked & .680 $\pm$ .002 & .106 & .174 & .477 \\
-Unweighted mean, attacked & .682 $\pm$ .001 & .106 & .182 & .485 \\
-Trimmed mean, attacked & .676 $\pm$ .002 & .105 & .183 & .460 \\
+FedAvg & .693 & .682 & $-1.1\pm0.4$ & 7.1 & $+3.4\pm0.2$ \\
+Unweighted mean & .691 & .683 & $-0.8\pm0.2$ & 8.1 & $+2.3\pm0.3$ \\
+Trimmed mean & .689 & .678 & $-1.1\pm0.3$ & 8.2 & $+2.1\pm0.1$ \\
+Median & .688 & .676 & $-1.2\pm0.4$ & 8.4 & $+2.1\pm0.4$ \\
+Krum & .629 & .612 & $-1.7\pm1.3$ & 11.5 & $+1.9\pm3.6$ \\
+Multi-Krum & .666 & .680 & $+1.4\pm2.0$ & 8.8 & $+1.2\pm1.2$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{table}[t]
-\caption{Paired differences in macro F1 (points; mean $\pm$ std, range)}
-\label{tab:deltas}
-\centering\footnotesize
-\begin{tabular}{@{}lcc@{}}
-\toprule
-Comparison & Mean $\pm$ std & Range \\
-\midrule
-Non-IID vs.\ IID (FedAvg) & $-1.80 \pm 0.17$ & $[-1.98, -1.63]$ \\
-Attack cost, FedAvg & $-1.11 \pm 0.46$ & $[-1.62, -0.72]$ \\
-Under attack: FedAvg $\rightarrow$ mean & $+0.28 \pm 0.32$ & $[+0.02, +0.63]$ \\
-Under attack: mean $\rightarrow$ trimmed & $-0.64 \pm 0.23$ & $[-0.91, -0.50]$ \\
-\bottomrule
-\end{tabular}
-\end{table}
+\emph{Global effect.} Federated training costs 3.2 macro-F1 points against centralized training (IID) and label skew another 1.7 (Table~\ref{tab:results}). The attacker lowers FedAvg's macro F1 by $1.09\pm0.37$ points (0.72--1.62 over five seeds), so \textbf{H1 is not supported}. Trimmed mean ends $0.43\pm0.21$ points \emph{below} FedAvg under attack, so \textbf{H2 is not supported} either. Macro F1 understates the attack: missed attacks rise from 7.1\% to 10.5\% (+48\% relative) while false alarms fall from 25.4\% to 17.6\%; the attack moves the boundary toward Benign, and the two errors partly cancel in F1.
 
-\emph{Global effect.} Federated training costs 3.2 points against the centralized model (IID) and label skew another 1.8 (Tables~\ref{tab:results}, \ref{tab:deltas}). The attacker lowers FedAvg's macro F1 by $1.11\pm0.46$ points (0.72--1.62), so \textbf{H1 is not supported} at full scale; trimmed mean ends 0.36 points \emph{lower} than FedAvg under attack, so \textbf{H2 is not supported} either (attack costs of the other rules: Table~\ref{tab:checks}). Macro F1 understates the attack: the miss rate rises from 7.2\% to 10.6\% (+49\% relative) while the false-alarm rate falls from 25.3\% to 17.4\%. The attack moves the decision boundary toward Benign, so more attacks are missed and fewer benign flows are flagged, and the two errors partly cancel in F1.
+\emph{Defenses.} Under attack, dropping size weighting changes macro F1 by $+0.14\pm0.31$ points and trimming on top by $-0.57\pm0.20$. Every robust rule raises missed attacks less than FedAvg, but mainly because its clean miss rate is already higher (8.1--8.8\% vs.\ 7.1\%): under attack FedAvg, the unweighted mean, trimmed mean and median all end at 10.3--10.5\%. Krum, which keeps a single client, is poor even clean (.629). Multi-Krum has the smallest increase but its clean runs vary by $\pm$2 F1 points across seeds, so its apparent F1 \emph{gain} under attack is not reliable.
 
-\emph{Weighting vs.\ trimming.} Under attack, dropping size weighting changes macro F1 by $+0.28\pm0.32$ points and trimming on top by $-0.64\pm0.23$. All three rules end at the same miss rate (10.5--10.6\%); the robust rules' smaller \emph{increases} come from higher clean miss rates (8.2--8.4\% vs.\ 7.2\%), not from blocking the attacker.
+\emph{Per family and client.} The attack hits exactly the families that resemble benign traffic (Fig.~\ref{fig:families}): under FedAvg, rows predicted Benign rise from 13.2 to 19.8\% (Recon), 15.5 to 21.7\% (Web), 20.4 to 27.8\% (BruteForce) and 14.2 to 22.0\% (Spoofing). BruteForce, of which the attacker holds only 154 rows, rises almost as much as Spoofing, its largest family: the shared benign boundary shifts. Unweighted mean, trimmed mean and multi-Krum all leave Spoofing \emph{worse} than FedAvg (24.7--25.0\%). Every client's held-out miss rate rises (by 0.7--6.5 points, mean 3.6); the largest increases are at clients 1, 4 and 8, whose traffic is mostly Recon, Web and BruteForce, not at the attacker.
 
-
-
-\emph{Per family.} The attack hits exactly the families that already resemble benign traffic (Fig.~\ref{fig:families}). Under FedAvg the share predicted Benign rises by 6.6 points for Recon (13.2\%$\rightarrow$19.8\%) and Web (15.7\%$\rightarrow$22.3\%), 7.5 for BruteForce (20.7\%$\rightarrow$28.2\%) and 8.2 for Spoofing (14.3\%$\rightarrow$22.6\%), consistent across seeds (std $\leq$0.9). DDoS, DoS and Mirai are never predicted Benign, attacked or not. Spoofing, the attacker's largest family, rises most, but BruteForce, of which it holds only 154 rows, rises almost as much: the attack shifts the shared benign boundary, not only the attacker's families. The defenses leave Spoofing worse than FedAvg under attack (25.5--25.6\% vs.\ 22.6\%).
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{clients_fnr.png}
-\caption{Per-client increase in missed attacks (binary FNR, attacked minus clean, same rule and seed; bars show the range over 3 seeds).}
-\label{fig:clientfnr}
-\end{figure}
-
-\emph{Per client.} Every client's held-out miss rate rises under attack (Fig.~\ref{fig:clientfnr}): by 0.7 to 6.8 points under FedAvg (mean 3.7). The largest increases are at clients 1, 4 and 8, whose attack traffic is 75--86\% Recon, Web and BruteForce, not at the attacker. For the worst-off client, label skew matters far more than the attack (macro F1 .692 IID vs.\ .471 non-IID; attack effect $<$.02).
+\emph{Why the defenses do not help.} The attacker \emph{is} detected: it ranks as the least typical client in Krum almost every round (mean rank 8.9 of 9), and 68\% of its parameters fall in the trimmed tails (37\% for honest clients). But trimming still passes about a third of them, and it also trims honest but unusual clients: client~0 has 61\% of its parameters in the tails with no attack. Removing the attacker entirely (multi-Krum) also removes the half of all Spoofing training data it holds, so Spoofing gets worse.
 
 \subsection{Robustness checks}\label{sec:checks}
 \begin{table}[t]
-\caption{Checks: paired macro-F1 change under attack (points) / miss rate under attack (\%)}
+\caption{Robustness checks: paired change under attack, macro F1 / missed attacks (points; 3 seeds; main and no-IAT rows: 5 seeds)}
 \label{tab:checks}
-\centering\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}lccc@{}}
+\centering\scriptsize
+\setlength{\tabcolsep}{2.2pt}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
-Setting & FedAvg & Unw.\ mean & Trimmed \\
+Setting & FedAvg & Unw.\ mean & Trimmed & Multi-Krum \\
 \midrule
-Clean miss rate & 7.2 & 8.2 & 8.4 \\
-1 attacker (main) & $-1.1$ / 10.6 & $-0.7$ / 10.6 & $-1.1$ / 10.5 \\
-2 attackers (5, 9) & $-2.5$ / 14.6 & $-1.8$ / 13.2 & $-2.0$ / 12.6 \\
-3 attackers (5, 7, 9)$^\ast$ & $-4.1$ / 18.7 & $-2.8$ / 15.6 & $-3.4$ / 15.7 \\
-60 rounds, 1 attacker & $-1.0$ / 9.6 & -- & $-1.2$ / 9.0 \\
-No IAT, 1 attacker$^\dagger$ & $-1.3$ / 16.1 & -- & -- \\
+Main: client 5, 50\% & $-1.1$/$+3.4$ & $-0.8$/$+2.3$ & $-1.1$/$+2.1$ & $+1.4$/$+1.2$ \\
+Typical-size attacker (0) & $-1.4$/$+2.9$ & $-1.0$/$+3.2$ & $-0.6$/$+2.0$ & $-2.6$/$+1.2$ \\
+Random attackers (6, 2, 3)$^a$ & $-0.5$/$+1.0$ & $-0.7$/$+1.8$ & $-0.5$/$+1.3$ & $-0.5$/$+0.4$ \\
+25\% of rows flipped & $-0.6$/$+1.6$ & -- & $-0.8$/$+1.2$ & $+0.5$/$+1.8$ \\
+100\% of rows flipped & $\mathbf{-4.7}$/$\mathbf{+11.2}$ & -- & $-2.1$/$+4.0$ & $+0.5$/$+1.9$ \\
+Recon$\rightarrow$Benign only (1) & $+0.0$/$+3.8$ & $-0.6$/$+3.6$ & $-0.4$/$+3.3$ & $-0.8$/$+1.1$ \\
+2 attackers (5, 9) & $-2.5$/$+7.4$ & $-1.8$/$+5.0$ & $-2.0$/$+4.2$ & -- \\
+3 attackers (5, 7, 9)$^b$ & $-4.1$/$+11.5$ & $-2.8$/$+7.4$ & $-3.4$/$+7.3$ & -- \\
+20 clients, 2 attackers & $-1.2$/$+2.8$ & $-0.6$/$+1.3$ & $-1.0$/$+1.0$ & $+0.4$/$+1.6$ \\
+60 rounds & $-1.0$/$+2.8$ & -- & $-1.2$/$+1.8$ & -- \\
+Class-balanced loss & $-0.3$/$+3.3$ & -- & $-1.0$/$+1.8$ & $-2.5$/$-1.5$ \\
+No IAT feature & $-1.1$/$+4.1$ & -- & -- & -- \\
 \bottomrule
-\multicolumn{4}{@{}p{0.97\columnwidth}@{}}{\scriptsize $^\ast$Stress test: more attackers than values trimmed per side. Clean miss rates at 60 rounds: 6.7 (FedAvg), 7.2 (trimmed). $^\dagger$Different subset and partition (attacker: client 1; clean miss rate 11.9); compare within the row only.}
+\multicolumn{5}{@{}p{0.98\columnwidth}@{}}{$^a$Mean of three seeded draws. $^b$Stress test: more attackers than values trimmed per side. Numbers in parentheses: attacking clients.}
 \end{tabular}
 \end{table}
-\emph{More attackers} (Table~\ref{tab:checks}). FedAvg loses 1.1, 2.5 and 4.1 points with 1, 2 and 3 attackers; H1's threshold is crossed only in the 3-attacker stress test (18.7\% missed). With 2 and 3 attackers both robust rules miss fewer attacks than FedAvg (trimmed vs.\ FedAvg, paired: $-2.0\pm0.2$ and $-3.0\pm1.1$ points), but the gain comes from dropping size weighting: trimming on top of the unweighted mean adds nothing to macro F1 ($-0.44$ and $-0.81$ points), even with 2 attackers, inside its trimming budget. \emph{Longer training} (60 rounds) raises clean FedAvg to .715 but leaves the attack cost at $-0.96\pm0.44$ points. \emph{Without IAT}, centralized macro F1 is unchanged (.745 vs.\ .741) and the attack cost is similar ($-1.25\pm0.23$ points; miss rate $+4.3$), so IAT is not driving the results. Its subset (305,889 rows) and partition differ slightly, so its federated baseline (.636) is not comparable.
+\emph{Attacker size vs.\ poisoning.} Our main attacker is also the largest client. A typical-sized attacker (client~0, 22,711 rows) does almost the same damage ($+2.9$ points missed), while randomly drawn clients do much less ($+0.7$ to $+1.3$). Client~3 is larger than client~0 but holds 22\% fewer attack rows and does a third of the damage: \emph{damage follows the number of poisoned rows, not client size} (Table~\ref{tab:checks}).
+
+\emph{Attack strength and targeting.} Flipping 25, 50 and 100\% of the attacker's attack rows costs FedAvg 0.6, 1.1 and 4.7 points, so H1's threshold is crossed only by the strongest attack. There the defenses do help: trimmed mean cuts the increase in missed attacks from $+11.2$ to $+4.0$ points and multi-Krum to $+1.9$. A Recon-only attack (client~1, all its Recon rows) leaves macro F1 unchanged ($+0.01$) while Recon rows predicted Benign rise from 13\% to 25\% (Fig.~\ref{fig:families}); multi-Krum holds Recon at 16\%, trimmed mean at 23\%.
+
+\emph{Other checks.} More attackers raise the damage steadily (stress test at 3). Twenty clients, 60 rounds, removing IAT and a class-balanced loss (which raises BruteForce recall from 43\% to 63\%) all leave the attack's effect on FedAvg at $+2.8$ to $+4.1$ points of missed attacks.
 
 \section{Discussion and Next Steps}
-With nine honest clients holding 85\% of the data, one attacker shifts the benign boundary rather than breaking the model; the pilot's 12-point loss more likely reflects its small subset and 5 rounds. Trimming likely fails because label flipping does not make updates extreme per coordinate; with more attackers, removing size weighting helps because the attackers are the largest clients.
+With nine honest clients holding 85\% of the data, a mild label flip shifts the benign boundary rather than breaking the model, and macro F1 barely registers it; a targeted flip is invisible to it. Robust rules detect the attacker but only help clearly when the attack is strong, because per-coordinate trimming lets part of the attacker through and removes honest outliers, while removing whole clients also removes their honest data. The pilot's 12-point loss reflected its small subset and 5 rounds.
 
-\emph{Next (final report):} median aggregation; randomly chosen attackers instead of the largest clients, to separate size from poisoning; per-family analysis of the sweep; and one final test-set evaluation. \emph{Limitations:} one testbed with simulated clients; files are not independent captures; capped prevalence; one attack type; three seeds (paired comparisons only).
+\emph{Next (final report):} more seeds for multi-Krum, defenses that down-weight rather than drop suspicious clients, and one final test-set evaluation. \emph{Limitations:} one testbed with simulated clients; files are not independent captures; capped prevalence; label flipping only.
 
 \begin{thebibliography}{00}
 \itemsep 0pt
@@ -197,6 +184,7 @@ With nine honest clients holding 85\% of the data, one attacker shifts the benig
 \bibitem{neto2023} E. C. P. Neto \emph{et al.}, ``CICIoT2023: A real-time dataset and benchmark for large-scale attacks in IoT environment,'' \emph{Sensors}, vol.~23, no.~13, 2023.
 \bibitem{yin2018} D. Yin, Y. Chen, K. Ramchandran, and P. Bartlett, ``Byzantine-robust distributed learning,'' \emph{Proc. ICML}, 2018.
 \bibitem{hsu2019} T.-M. H. Hsu, H. Qi, and M. Brown, ``Measuring the effects of non-identical data distribution for federated visual classification,'' arXiv:1909.06335, 2019.
+\bibitem{blanchard2017} P. Blanchard, E. M. El Mhamdi, R. Guerraoui, and J. Stainer, ``Machine learning with adversaries: Byzantine tolerant gradient descent,'' \emph{Proc. NeurIPS}, 2017.
 \bibitem{beutel2020} D. J. Beutel \emph{et al.}, ``Flower: A friendly federated learning framework,'' arXiv:2007.14390, 2020.
 \end{thebibliography}
 
